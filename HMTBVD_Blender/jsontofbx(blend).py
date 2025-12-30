@@ -1,6 +1,6 @@
 import bpy
 import json
-import mathutils
+import mathutils  # type: ignore
 # ============================================
 # CONFIGURATION - CHANGE THESE PATHS
 # ============================================
