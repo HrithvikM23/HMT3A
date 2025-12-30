@@ -1,102 +1,66 @@
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TensorFlow logs not errors
-os.environ['GLOG_minloglevel'] = '2' # Suppress Google logs not errors
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['GLOG_minloglevel'] = '2'
 import warnings
 warnings.filterwarnings('ignore')
 
 import cv2
 import mediapipe as mp
-import numpy as np
-from tkinter import filedialog
-import tkinter as tk
 import json
-# ============================================
-# CONFIGURATION
-# ============================================
-def get_video_source():
-    """Choose between webcam or video file"""
-    print("\n" + "="*60)
-    print("   FULL BODY + FINGER MOTION CAPTURE")
-    print("="*60)
-    print("\nSelect video source:")
-    print("  [1] - Use Webcam")
-    print("  [2] - Select video File")
-    print("="*60)
-    
-    while True:
-        choice = input("\nEnter your choice (1/2): ").strip().upper()
-        if choice == '1':
-            print("\n✓ Using webcam...")
-            return None, True
-        elif choice == '2':
-            print("\n✓ Opening file browser...")
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes('-topmost', True)  # Bring to foreground
-            root.lift()
-            root.focus_force()
-            file_path = filedialog.askopenfilename(
-                title="Select Video File",
-                filetypes=[
-                    ("Video files", "*.mp4 *.avi *.mov *.mkv"),
-                    ("All files", "*.*")
-                ],
-                parent=root
-            )
-            root.destroy()
-            
-            if file_path:
-                print(f"✓ Selected: {file_path}")
-                return file_path, False
-            else:
-                print("\nNo file selected. Try again.")
-        else:
-            print("Invalid. Enter 'W' or 'F'.")
-
-INPUT_VIDEO, USE_WEBCAM = get_video_source()
-OUTPUT_VIDEO = "output_full_skeleton.mp4"
-OUTPUT_JSON = "motion_data_full.json"
+from tkinter import Tk, filedialog
 
 # ============================================
-# MEDIAPIPE SETUP - POSE + HANDS
+# VIDEO SOURCE SELECTION
 # ============================================
-mp_pose = mp.solutions.pose
-mp_hands = mp.solutions.hands
-mp_drawing = mp.solutions.drawing_utils
-mp_drawing_styles = mp.solutions.drawing_styles
+print("\n" + "="*60)
+print("   BODY + HANDS MOTION CAPTURE (NO HEAD)")
+print("="*60)
+print("\nSelect video source:")
+print("  [1] Webcam")
+print("  [2] Video file")
 
-# Initialize Pose
-pose = mp_pose.Pose(
-    static_image_mode=False,
-    model_complexity=2,  # Highest accuracy
-    smooth_landmarks=True,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
-)
+choice = input("\nChoice (1 or 2): ").strip()
 
-# Initialize Hands
-hands = mp_hands.Hands(
-    static_image_mode=False,
-    max_num_hands=2,
-    model_complexity=1,  # Back to complexity 1 to avoid C2__PACKET error
-    min_detection_confidence=0.7,  # Higher for better finger tracking
-    min_tracking_confidence=0.7
-)
-
-# ============================================
-# OPEN VIDEO
-# ============================================
-if USE_WEBCAM:
+if choice == "1":
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    print("✓ Using webcam")
+    USE_WEBCAM = True
 else:
-    cap = cv2.VideoCapture(INPUT_VIDEO)
+    print("\n✓ Opening file browser...")
+    root = Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)
+    
+    video_path = filedialog.askopenfilename(
+        title="Select Video File",
+        filetypes=[
+            ("Video files", "*.mp4 *.avi *.mov *.mkv *.flv *.wmv"),
+            ("MP4 files", "*.mp4"),
+            ("All files", "*.*")
+        ]
+    )
+    
+    root.destroy()
+    
+    if not video_path:
+        print("ERROR: No file selected!")
+        input("Press Enter to exit...")
+        exit(1)
+    
+    cap = cv2.VideoCapture(video_path)
+    print(f"✓ Selected: {video_path}")
+    USE_WEBCAM = False
 
 if not cap.isOpened():
-    print("Error: Could not open video source")
+    print("ERROR: Cannot open video source!")
+    input("Press Enter to exit...")
     exit(1)
 
+# ============================================
+# VIDEO SETTINGS
+# ============================================
 fps = int(cap.get(cv2.CAP_PROP_FPS))
 if fps == 0 or fps > 120:
     fps = 30
@@ -104,12 +68,41 @@ if fps == 0 or fps > 120:
 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-# Video writer
+print(f"✓ Resolution: {width}x{height}")
+print(f"✓ FPS: {fps}")
+
+OUTPUT_VIDEO = "output_motion.mp4"
+OUTPUT_JSON = "motion_data_cleaned.json"
+
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, fps, (width, height))
 
 # ============================================
-# BODY LANDMARKS (33 points)
+# MEDIAPIPE SETUP
+# ============================================
+mp_pose = mp.solutions.pose
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+mp_drawing_styles = mp.solutions.drawing_styles
+
+pose = mp_pose.Pose(
+    static_image_mode=False,
+    model_complexity=1,
+    smooth_landmarks=True,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
+)
+
+hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=2,
+    model_complexity=1,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
+)
+
+# ============================================
+# BODY LANDMARKS (NO HEAD/FACE)
 # ============================================
 BODY_LANDMARKS = {
     'left_shoulder': 11,
@@ -118,26 +111,16 @@ BODY_LANDMARKS = {
     'right_elbow': 14,
     'left_wrist': 15,
     'right_wrist': 16,
-    'left_pinky': 17,
-    'right_pinky': 18,
-    'left_index': 19,
-    'right_index': 20,
-    'left_thumb': 21,
-    'right_thumb': 22,
     'left_hip': 23,
     'right_hip': 24,
     'left_knee': 25,
     'right_knee': 26,
     'left_ankle': 27,
-    'right_ankle': 28,
-    'left_heel': 29,
-    'right_heel': 30,
-    'left_foot_index': 31,
-    'right_foot_index': 32
+    'right_ankle': 28
 }
 
 # ============================================
-# HAND LANDMARKS (21 points per hand)
+# HAND LANDMARKS (21 per hand)
 # ============================================
 HAND_LANDMARKS = {
     'wrist': 0,
@@ -164,27 +147,21 @@ HAND_LANDMARKS = {
 }
 
 # ============================================
-# PROCESS VIDEO
+# CAPTURE LOOP
 # ============================================
 motion_data = []
 frame_count = 0
 
-print(f"\n{'='*60}")
-print(f"Processing video with FULL FINGER TRACKING...")
-print(f"Input: {'Webcam' if USE_WEBCAM else INPUT_VIDEO}")
-print(f"Output video: {OUTPUT_VIDEO}")
-print(f"Motion data: {OUTPUT_JSON}")
-print(f"FPS: {fps}")
-print(f"Tracking: 33 body + 42 finger landmarks (21 per hand)")
-print(f"Press 'Q' to stop")
-print(f"{'='*60}\n")
+print("\n" + "="*60)
+print("RECORDING - Body: 12 points | Hands: 21 points each")
+print("Press 'Q' to stop")
+print("="*60 + "\n")
 
-# Wait for camera to initialize if using webcam
 if USE_WEBCAM:
     print("Warming up camera...")
     for _ in range(30):
         cap.read()
-    print("Camera ready!")
+    print("✓ Camera ready!\n")
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -193,72 +170,57 @@ while cap.isOpened():
 
     frame_count += 1
     
-    # Ensure frame is valid
-    if frame is None or frame.size == 0:
-        continue
-        
+    # Convert to RGB
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    rgb.flags.writeable = False  # Improve performance
+    rgb.flags.writeable = False
     
-    # Process both pose and hands
-    try:
-        pose_results = pose.process(rgb)
-        hands_results = hands.process(rgb)
-    except Exception as e:
-        print(f"Error processing frame {frame_count}: {e}")
-        continue
+    # Process
+    pose_results = pose.process(rgb)
+    hands_results = hands.process(rgb)
     
     rgb.flags.writeable = True
-
-    # Draw on frame
     annotated_frame = frame.copy()
     
-    # Initialize frame data
+    # Frame data
     frame_data = {
         'frame': frame_count,
         'timestamp': frame_count / fps,
-        'body_landmarks': {},
-        'left_hand_landmarks': {},
-        'right_hand_landmarks': {}
+        'body': {},
+        'left_hand': {},
+        'right_hand': {}
     }
-
-    tracking_status = []
-
+    
     # ============================================
-    # BODY TRACKING
+    # BODY (NO HEAD)
     # ============================================
     if pose_results.pose_landmarks:
-        # Draw pose
         mp_drawing.draw_landmarks(
             annotated_frame,
             pose_results.pose_landmarks,
             mp_pose.POSE_CONNECTIONS,
             landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style()
         )
-
-        # Extract body landmarks
+        
         for name, idx in BODY_LANDMARKS.items():
             landmark = pose_results.pose_landmarks.landmark[idx]
-            frame_data['body_landmarks'][name] = {
-                'x': landmark.x,
-                'y': landmark.y,
-                'z': landmark.z,
-                'visibility': landmark.visibility
-            }
-        
-        tracking_status.append("Body: ✓")
-    else:
-        tracking_status.append("Body: ✗")
-
+            if landmark.visibility > 0.5:
+                frame_data['body'][name] = {
+                    'x': float(landmark.x),
+                    'y': float(landmark.y),
+                    'z': float(landmark.z),
+                    'visibility': float(landmark.visibility)
+                }
+    
     # ============================================
-    # HAND TRACKING
+    # HANDS
     # ============================================
     if hands_results.multi_hand_landmarks and hands_results.multi_handedness:
         for hand_idx, hand_landmarks in enumerate(hands_results.multi_hand_landmarks):
-            # Determine which hand (left or right)
+            # Determine left or right
             handedness = hands_results.multi_handedness[hand_idx].classification[0].label
+            hand_key = 'left_hand' if handedness == 'Left' else 'right_hand'
             
-            # Draw hand skeleton
+            # Draw
             mp_drawing.draw_landmarks(
                 annotated_frame,
                 hand_landmarks,
@@ -266,54 +228,48 @@ while cap.isOpened():
                 mp_drawing_styles.get_default_hand_landmarks_style(),
                 mp_drawing_styles.get_default_hand_connections_style()
             )
-
-            # Extract finger landmarks
-            hand_data = {}
+            
+            # Extract all 21 points
             for name, idx in HAND_LANDMARKS.items():
                 landmark = hand_landmarks.landmark[idx]
-                hand_data[name] = {
-                    'x': landmark.x,
-                    'y': landmark.y,
-                    'z': landmark.z
+                frame_data[hand_key][name] = {
+                    'x': float(landmark.x),
+                    'y': float(landmark.y),
+                    'z': float(landmark.z)
                 }
-
-            # Store in correct hand
-            if handedness == "Left":
-                frame_data['left_hand_landmarks'] = hand_data
-                tracking_status.append("L.Hand: ✓")
-            else:
-                frame_data['right_hand_landmarks'] = hand_data
-                tracking_status.append("R.Hand: ✓")
-
-    motion_data.append(frame_data)
-
-    # ============================================
-    # DISPLAY MINIMAL STATUS - TOP RIGHT
-    # ============================================
-    # Simple frame counter in top right corner
-    frame_text = f"Frame: {frame_count}"
     
-    # Get text size for positioning
-    text_size = cv2.getTextSize(frame_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
-    text_x = width - text_size[0] - 10  # 10px from right edge
-    text_y = 25  # 25px from top
+    # Save frame if body tracked
+    if len(frame_data['body']) >= 8:
+        motion_data.append(frame_data)
     
-    cv2.putText(annotated_frame, frame_text, (text_x, text_y), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-
-    # Write frame
+    # Display status
+    body_pts = len(frame_data['body'])
+    left_pts = len(frame_data['left_hand'])
+    right_pts = len(frame_data['right_hand'])
+    
+    cv2.putText(
+        annotated_frame,
+        f"F:{frame_count} | Body:{body_pts} | L:{left_pts} | R:{right_pts}",
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (0, 255, 0),
+        2
+    )
+    
     out.write(annotated_frame)
-
-    # Display
-    cv2.imshow("Motion Capture (Press Q to stop)", annotated_frame)
+    cv2.imshow("Motion Capture (Q to stop)", annotated_frame)
+    
     if cv2.waitKey(1) & 0xFF == ord('q'):
-        print("\nStopped by user")
+        print("\n✓ Stopped by user")
         break
-
-    # Progress
+    
     if frame_count % 30 == 0:
-        print(f"Processed {frame_count} frames...")
+        print(f"Processed {frame_count} frames, captured {len(motion_data)}")
 
+# ============================================
+# CLEANUP
+# ============================================
 cap.release()
 out.release()
 cv2.destroyAllWindows()
@@ -321,22 +277,19 @@ pose.close()
 hands.close()
 
 # ============================================
-# SAVE MOTION DATA
+# SAVE DATA
 # ============================================
 output_data = {
     'metadata': {
         'fps': fps,
-        'total_frames': frame_count,
-        'duration': frame_count / fps,
+        'total_frames': len(motion_data),
+        'duration': len(motion_data) / fps,
         'width': width,
         'height': height,
-        'body_landmarks': len(BODY_LANDMARKS),
-        'hand_landmarks_per_hand': len(HAND_LANDMARKS),
-        'total_possible_landmarks': len(BODY_LANDMARKS) + 2 * len(HAND_LANDMARKS)
-    },
-    'landmark_definitions': {
-        'body': BODY_LANDMARKS,
-        'hand': HAND_LANDMARKS
+        'body_landmarks': list(BODY_LANDMARKS.keys()),
+        'hand_landmarks': list(HAND_LANDMARKS.keys()),
+        'body_count': len(BODY_LANDMARKS),
+        'hand_count_per_hand': len(HAND_LANDMARKS)
     },
     'frames': motion_data
 }
@@ -344,13 +297,25 @@ output_data = {
 with open(OUTPUT_JSON, 'w') as f:
     json.dump(output_data, f, indent=2)
 
-print(f"\n{'='*60}")
-print(f"✓ PROCESSING COMPLETE!")
-print(f"{'='*60}")
-print(f"Total frames: {frame_count}")
-print(f"Duration: {frame_count/fps:.2f} seconds")
-print(f"Body landmarks: {len(BODY_LANDMARKS)}")
-print(f"Finger landmarks per hand: {len(HAND_LANDMARKS)}")
-print(f"Total landmarks: {len(BODY_LANDMARKS) + 2*len(HAND_LANDMARKS)}")
-print(f"\n✓ Saved video: {OUTPUT_VIDEO}")
-print(f"✓ Saved motion: {OUTPUT_JSON}")
+# ============================================
+# SUMMARY
+# ============================================
+left_hand_frames = sum(1 for f in motion_data if f['left_hand'])
+right_hand_frames = sum(1 for f in motion_data if f['right_hand'])
+
+print("\n" + "="*60)
+print("✓ CAPTURE COMPLETE!")
+print("="*60)
+print(f"Total frames processed: {frame_count}")
+print(f"Good frames captured: {len(motion_data)}")
+print(f"Duration: {len(motion_data)/fps:.2f} seconds")
+print(f"\nTracking summary:")
+print(f"  Body points: {len(BODY_LANDMARKS)} (NO HEAD)")
+print(f"  Hand points per hand: {len(HAND_LANDMARKS)}")
+print(f"  Left hand tracked: {left_hand_frames} frames")
+print(f"  Right hand tracked: {right_hand_frames} frames")
+print(f"\n✓ Video: {OUTPUT_VIDEO}")
+print(f"✓ Data: {OUTPUT_JSON}")
+print("="*60)
+
+input("\nPress Enter to exit...")
