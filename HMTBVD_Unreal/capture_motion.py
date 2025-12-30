@@ -72,8 +72,12 @@ print(f"Resolution: {width}x{height}")
 print(f"FPS: {fps}")
 
 # Output files
-OUTPUT_VIDEO = "output_motion.mp4"
-OUTPUT_JSON = "motion_data_cleaned.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # current script folder
+OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+OUTPUT_VIDEO = os.path.join(OUTPUT_DIR, "output_motion.mp4")
+OUTPUT_JSON  = os.path.join(OUTPUT_DIR, "motion_data_cleaned.json")
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, fps, (width, height))
