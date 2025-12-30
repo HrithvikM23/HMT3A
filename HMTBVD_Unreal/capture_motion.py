@@ -1,3 +1,8 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TensorFlow logs
+os.environ['GLOG_minloglevel'] = '2' # Suppress Google logs
+import warnings
+warnings.filterwarnings('ignore')
 import cv2
 import mediapipe as mp
 import json
