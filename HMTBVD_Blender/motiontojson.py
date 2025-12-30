@@ -1,3 +1,9 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TensorFlow logs not errors
+os.environ['GLOG_minloglevel'] = '2' # Suppress Google logs not errors
+import warnings
+warnings.filterwarnings('ignore')
+
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -13,16 +19,16 @@ def get_video_source():
     print("   FULL BODY + FINGER MOTION CAPTURE")
     print("="*60)
     print("\nSelect video source:")
-    print("  [W] - Use Webcam")
-    print("  [F] - Select video File")
+    print("  [1] - Use Webcam")
+    print("  [2] - Select video File")
     print("="*60)
     
     while True:
-        choice = input("\nEnter your choice (W/F): ").strip().upper()
-        if choice == 'W':
+        choice = input("\nEnter your choice (1/2): ").strip().upper()
+        if choice == '1':
             print("\n✓ Using webcam...")
             return None, True
-        elif choice == 'F':
+        elif choice == '2':
             print("\n✓ Opening file browser...")
             root = tk.Tk()
             root.withdraw()
@@ -48,8 +54,8 @@ def get_video_source():
             print("Invalid. Enter 'W' or 'F'.")
 
 INPUT_VIDEO, USE_WEBCAM = get_video_source()
-OUTPUT_VIDEO = r"D:\IDT\HMTBVD_Blender\output_full_skeleton.mp4"
-OUTPUT_JSON = r"D:\IDT\HMTBVD_Blender\motion_data_full.json"
+OUTPUT_VIDEO = "output_full_skeleton.mp4"
+OUTPUT_JSON = "motion_data_full.json"
 
 # ============================================
 # MEDIAPIPE SETUP - POSE + HANDS
@@ -106,17 +112,6 @@ out = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, fps, (width, height))
 # BODY LANDMARKS (33 points)
 # ============================================
 BODY_LANDMARKS = {
-    'nose': 0,
-    'left_eye_inner': 1,
-    'left_eye': 2,
-    'left_eye_outer': 3,
-    'right_eye_inner': 4,
-    'right_eye': 5,
-    'right_eye_outer': 6,
-    'left_ear': 7,
-    'right_ear': 8,
-    'mouth_left': 9,
-    'mouth_right': 10,
     'left_shoulder': 11,
     'right_shoulder': 12,
     'left_elbow': 13,
