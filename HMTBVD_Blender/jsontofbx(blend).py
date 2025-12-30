@@ -1,7 +1,6 @@
 import bpy
 import json
 import mathutils
-
 # ============================================
 # CONFIGURATION - CHANGE THESE PATHS
 # ============================================
