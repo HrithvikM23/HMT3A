@@ -48,8 +48,8 @@ def get_video_source():
             print("Invalid. Enter 'W' or 'F'.")
 
 INPUT_VIDEO, USE_WEBCAM = get_video_source()
-OUTPUT_VIDEO = "output_full_skeleton.mp4"
-OUTPUT_JSON = "motion_data_full.json"
+OUTPUT_VIDEO = r"D:\IDT\HMTBVD_Blender\output_full_skeleton.mp4"
+OUTPUT_JSON = r"D:\IDT\HMTBVD_Blender\motion_data_full.json"
 
 # ============================================
 # MEDIAPIPE SETUP - POSE + HANDS

@@ -4,8 +4,8 @@ import mathutils
 # ============================================
 # CONFIGURATION - CHANGE THESE PATHS
 # ============================================
-JSON_FILE = r"D:\IDT\HMTBVD\motion_data_full.json"  # ← CHANGE THIS TO YOUR PATH
-FBX_OUTPUT = r"D:\IDT\HMTBVD\motion_capture.fbx"    # ← WHERE TO SAVE FBX
+JSON_FILE = r"D:\IDT\HMTBVD_Blender\motion_data_full.json"  # ← CHANGE THIS TO YOUR PATH
+FBX_OUTPUT = r"D:\IDT\HMTBVD_Blender\motion_capture.fbx"    # ← WHERE TO SAVE FBX
 
 # ============================================
 # LOAD MOTION DATA
