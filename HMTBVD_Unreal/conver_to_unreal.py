@@ -4,17 +4,22 @@ import csv
 import os
 
 print("\n" + "="*60)
-print("   CONVERT TO UNREAL - STEP 2")
+print("   CONVERT TO UNREAL")
 print("="*60)
 
 # ============================================
 # CHECK INPUT FILE
 # ============================================
-INPUT_JSON = "motion_data_cleaned.json"
-OUTPUT_CSV = "motion_data_unreal.csv"
+# Output files
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # current script folder
+OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+INPUT_JSON = os.path.join(OUTPUT_DIR, "motion_data_cleaned.json")
+OUTPUT_CSV = os.path.join(OUTPUT_DIR, "motion_data_unreal.csv")
 
 if not os.path.exists(INPUT_JSON):
-    print(f"\n❌ ERROR: {INPUT_JSON} not found!")
+    print(f"\nERROR: {INPUT_JSON} not found!")
     print("Run capture_motion.py first!")
     input("Press Enter to exit...")
     exit(1)
@@ -27,9 +32,9 @@ with open(INPUT_JSON, 'r') as f:
 metadata = data['metadata']
 frames = data['frames']
 
-print(f"✓ Loaded {metadata['total_frames']} frames")
-print(f"✓ FPS: {metadata['fps']}")
-print(f"✓ Duration: {metadata['duration']:.2f}s")
+print(f"Loaded {metadata['total_frames']} frames")
+print(f"FPS: {metadata['fps']}")
+print(f"Duration: {metadata['duration']:.2f}s")
 
 # ============================================
 # BODY PARTS TO EXPORT
@@ -93,7 +98,7 @@ with open(OUTPUT_CSV, 'w', newline='') as csvfile:
         
         writer.writerow(row)
 
-print(f"✓ CSV created: {OUTPUT_CSV}")
+print(f"CSV created: {OUTPUT_CSV}")
 
 # ============================================
 # PRINT INSTRUCTIONS
