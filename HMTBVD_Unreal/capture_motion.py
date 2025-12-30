@@ -81,7 +81,7 @@ mp_drawing_styles = mp.solutions.drawing_styles
 
 pose = mp_pose.Pose(
     static_image_mode=False,
-    model_complexity=1,
+    model_complexity=2,
     smooth_landmarks=True,
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
@@ -172,7 +172,7 @@ while cap.isOpened():
                 }
         
         # Only save frames with good tracking
-        if len(frame_data['body']) >= 8:  # At least 8 body parts visible
+        if len(frame_data['body']) >= 10:  # At least 10 body parts visible
             motion_data.append(frame_data)
     
     # Show frame counter
@@ -197,7 +197,7 @@ while cap.isOpened():
     
     # Progress update
     if frame_count % 30 == 0:
-        print(f"Processed {frame_count} frames, captured {len(motion_data)} good frames...")
+        print(f"Processed {frame_count} frames, captured {len(motion_data)}")
 
 # ============================================
 # CLEANUP
