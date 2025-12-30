@@ -61,7 +61,7 @@ BODY_PARTS = [
 print(f"\nCreating CSV for Unreal...")
 
 # CSV headers
-csv_headers = ['Frame', 'Timestamp']
+csv_headers = ['RowName', 'Frame', 'Timestamp']
 for part in BODY_PARTS:
     csv_headers.extend([f'{part}_X', f'{part}_Y', f'{part}_Z'])
 
@@ -72,9 +72,11 @@ with open(OUTPUT_CSV, 'w', newline='') as csvfile:
     
     for frame in frames:
         row = {
-            'Frame': frame['frame'],
-            'Timestamp': frame['timestamp']
-        }
+    'RowName': str(frame['frame']),  # must be string
+    'Frame': frame['frame'],
+    'Timestamp': frame['timestamp']
+}
+
         
         # Convert each body part to Unreal coordinates
         for part in BODY_PARTS:
