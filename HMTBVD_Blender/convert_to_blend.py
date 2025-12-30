@@ -1,3 +1,6 @@
+#=================================================================================  
+#You Have To Use Blender's Built-In Python Environment To Run This Script!!!!!!!!!
+#=================================================================================
 import bpy
 import json
 import mathutils  # type: ignore
