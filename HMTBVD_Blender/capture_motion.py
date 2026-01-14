@@ -1,5 +1,5 @@
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['GLOG_minloglevel'] = '2'
 import warnings
 warnings.filterwarnings('ignore')
@@ -25,14 +25,14 @@ if choice == "1":
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    print("✓ Using webcam")
+    print("Using webcam")
     USE_WEBCAM = True
 else:
-    print("\n✓ Opening file browser...")
+    print("\nOpening file browser...")
     root = Tk()
     root.withdraw()
     root.attributes('-topmost', True)
-    
+
     video_path = filedialog.askopenfilename(
         title="Select Video File",
         filetypes=[
@@ -41,14 +41,14 @@ else:
             ("All files", "*.*")
         ]
     )
-    
+
     root.destroy()
-    
+
     if not video_path:
         print("ERROR: No file selected!")
         input("Press Enter to exit...")
         exit(1)
-    
+
     cap = cv2.VideoCapture(video_path)
     print(f"✓ Selected: {video_path}")
     USE_WEBCAM = False
@@ -68,10 +68,10 @@ if fps == 0 or fps > 120:
 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-print(f"✓ Resolution: {width}x{height}")
-print(f"✓ FPS: {fps}")
-# Output files
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # current script folder
+print(f"Resolution: {width}x{height}")
+print(f"FPS: {fps}")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -106,7 +106,7 @@ hands = mp_hands.Hands(
 )
 
 # ============================================
-# BODY LANDMARKS (NO HEAD/FACE)
+# LANDMARK DEFINITIONS
 # ============================================
 BODY_LANDMARKS = {
     'left_shoulder': 11,
@@ -123,9 +123,6 @@ BODY_LANDMARKS = {
     'right_ankle': 28
 }
 
-# ============================================
-# HAND LANDMARKS (21 per hand)
-# ============================================
 HAND_LANDMARKS = {
     'wrist': 0,
     'thumb_cmc': 1,
@@ -162,10 +159,8 @@ print("Press 'Q' to stop")
 print("="*60 + "\n")
 
 if USE_WEBCAM:
-    print("Warming up camera...")
     for _ in range(30):
         cap.read()
-    print("✓ Camera ready!\n")
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -173,30 +168,30 @@ while cap.isOpened():
         break
 
     frame_count += 1
-    
-    # Convert to RGB
+
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     rgb.flags.writeable = False
-    
-    # Process
+
     pose_results = pose.process(rgb)
     hands_results = hands.process(rgb)
-    
+
     rgb.flags.writeable = True
     annotated_frame = frame.copy()
-    
-    # Frame data
+
     frame_data = {
         'frame': frame_count,
-        'timestamp': frame_count / fps,
+        'timestamp': (frame_count - 1) / fps,
         'body': {},
         'left_hand': {},
         'right_hand': {}
     }
-    
-    # ============================================
-    # BODY (NO HEAD)
-    # ============================================
+
+    # Initialize fixed hand structure
+    for name in HAND_LANDMARKS:
+        frame_data['left_hand'][name] = None
+        frame_data['right_hand'][name] = None
+
+    # BODY
     if pose_results.pose_landmarks:
         mp_drawing.draw_landmarks(
             annotated_frame,
@@ -204,27 +199,21 @@ while cap.isOpened():
             mp_pose.POSE_CONNECTIONS,
             landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style()
         )
-        
+
         for name, idx in BODY_LANDMARKS.items():
             landmark = pose_results.pose_landmarks.landmark[idx]
-            if landmark.visibility > 0.5:
-                frame_data['body'][name] = {
-                    'x': float(landmark.x),
-                    'y': float(landmark.y),
-                    'z': float(landmark.z),
-                    'visibility': float(landmark.visibility)
-                }
-    
-    # ============================================
+            frame_data['body'][name] = {
+                'x': float(landmark.x),
+                'y': float(landmark.y),
+                'z': float(landmark.z),
+                'visibility': float(landmark.visibility)
+            }
+
     # HANDS
-    # ============================================
-    if hands_results.multi_hand_landmarks and hands_results.multi_handedness:
+    if hands_results.multi_hand_landmarks:
         for hand_idx, hand_landmarks in enumerate(hands_results.multi_hand_landmarks):
-            # Determine left or right
-            handedness = hands_results.multi_handedness[hand_idx].classification[0].label
-            hand_key = 'left_hand' if handedness == 'Left' else 'right_hand'
-            
-            # Draw
+            hand_key = 'left_hand' if hand_idx == 0 else 'right_hand'
+
             mp_drawing.draw_landmarks(
                 annotated_frame,
                 hand_landmarks,
@@ -232,44 +221,32 @@ while cap.isOpened():
                 mp_drawing_styles.get_default_hand_landmarks_style(),
                 mp_drawing_styles.get_default_hand_connections_style()
             )
-            
-            # Extract all 21 points
+
             for name, idx in HAND_LANDMARKS.items():
-                landmark = hand_landmarks.landmark[idx]
+                lm = hand_landmarks.landmark[idx]
                 frame_data[hand_key][name] = {
-                    'x': float(landmark.x),
-                    'y': float(landmark.y),
-                    'z': float(landmark.z)
+                    'x': float(lm.x),
+                    'y': float(lm.y),
+                    'z': float(lm.z)
                 }
-    
-    # Save frame if body tracked
-    if len(frame_data['body']) >= 8:
-        motion_data.append(frame_data)
-    
-    # Display status
-    body_pts = len(frame_data['body'])
-    left_pts = len(frame_data['left_hand'])
-    right_pts = len(frame_data['right_hand'])
-    
+
+    motion_data.append(frame_data)
+
     cv2.putText(
         annotated_frame,
-        f"F:{frame_count} | Body:{body_pts} | L:{left_pts} | R:{right_pts}",
+        f"F:{frame_count}",
         (10, 30),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.6,
         (0, 255, 0),
         2
     )
-    
+
     out.write(annotated_frame)
     cv2.imshow("Motion Capture (Q to stop)", annotated_frame)
-    
+
     if cv2.waitKey(1) & 0xFF == ord('q'):
-        print("\n✓ Stopped by user")
         break
-    
-    if frame_count % 30 == 0:
-        print(f"Processed {frame_count} frames, captured {len(motion_data)}")
 
 # ============================================
 # CLEANUP
@@ -286,8 +263,8 @@ hands.close()
 output_data = {
     'metadata': {
         'fps': fps,
-        'total_frames': len(motion_data),
-        'duration': len(motion_data) / fps,
+        'total_frames': frame_count,
+        'duration': frame_count / fps,
         'width': width,
         'height': height,
         'body_landmarks': list(BODY_LANDMARKS.keys()),
@@ -301,25 +278,7 @@ output_data = {
 with open(OUTPUT_JSON, 'w') as f:
     json.dump(output_data, f, indent=2)
 
-# ============================================
-# SUMMARY
-# ============================================
-left_hand_frames = sum(1 for f in motion_data if f['left_hand'])
-right_hand_frames = sum(1 for f in motion_data if f['right_hand'])
-
-print("\n" + "="*60)
-print("✓ CAPTURE COMPLETE!")
-print("="*60)
-print(f"Total frames processed: {frame_count}")
-print(f"Good frames captured: {len(motion_data)}")
-print(f"Duration: {len(motion_data)/fps:.2f} seconds")
-print(f"\nTracking summary:")
-print(f"  Body points: {len(BODY_LANDMARKS)} (NO HEAD)")
-print(f"  Hand points per hand: {len(HAND_LANDMARKS)}")
-print(f"  Left hand tracked: {left_hand_frames} frames")
-print(f"  Right hand tracked: {right_hand_frames} frames")
-print(f"\n✓ Video: {OUTPUT_VIDEO}")
-print(f"✓ Data: {OUTPUT_JSON}")
-print("="*60)
-
-input("\nPress Enter to exit...")
+print("\nCAPTURE COMPLETE")
+print(f"Video: {OUTPUT_VIDEO}")
+print(f"Data: {OUTPUT_JSON}")
+ 
