@@ -15,22 +15,23 @@ public class Landmark
 
 public class UDPReceiver : MonoBehaviour
 {
-    UdpClient client;
-    int port = 5052;
+    private UdpClient client;
+    private const int PORT = 5052;
 
+    // THIS is what MediapipeMover will read
     public Dictionary<int, Landmark> latestLandmarks =
         new Dictionary<int, Landmark>();
 
     void Start()
     {
-        client = new UdpClient(port);
+        client = new UdpClient(PORT);
         client.BeginReceive(ReceiveCallback, null);
-        Debug.Log("UDP Receiver started on port " + port);
+        Debug.Log("Listening on UDP port 5052");
     }
 
     void ReceiveCallback(IAsyncResult result)
     {
-        IPEndPoint ip = new IPEndPoint(IPAddress.Any, port);
+        IPEndPoint ip = new IPEndPoint(IPAddress.Any, PORT);
         byte[] data = client.EndReceive(result, ref ip);
 
         string json = Encoding.UTF8.GetString(data);
@@ -39,25 +40,28 @@ public class UDPReceiver : MonoBehaviour
         {
             latestLandmarks = JsonUtility.FromJson<Wrapper>(Wrap(json)).dict;
         }
-        catch { }
+        catch (Exception e)
+        {
+            Debug.LogWarning("JSON parse failed: " + e.Message);
+        }
 
         client.BeginReceive(ReceiveCallback, null);
     }
 
-    // Helper to make Unity's JSON work with dictionary
+    // Unity cannot parse raw dictionaries, so we wrap it
     string Wrap(string json)
     {
         return "{\"dict\":" + json + "}";
-    }
-
-    void OnApplicationQuit()
-    {
-        client.Close();
     }
 
     [Serializable]
     public class Wrapper
     {
         public Dictionary<int, Landmark> dict;
+    }
+
+    void OnApplicationQuit()
+    {
+        client.Close();
     }
 }
