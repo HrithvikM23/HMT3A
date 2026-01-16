@@ -1,2 +1,5 @@
-HMTBVD_Unreal/outputs/
-HMTBVD_Blender/outputs/
+HMT3A_Blender/outputs/
+HMT3A_Unity/exports/
+HMT3A_Unity/unity_client/*
+!HMT3A_Unity/unity_client/readme.txt
+HMT3A_Unity/mediapipe_server/__pycache__
