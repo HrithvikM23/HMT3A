@@ -2,6 +2,12 @@
 
 Kinara is a local video and webcam motion-tracking pipeline built around a YOLO body pose model and an ONNX hand pose model. It supports single-person tracking, single-camera multi-person tracking, optional multi-camera fusion, live UDP output for Unreal-side receivers, and stack-safe recorded outputs.
 
+Project documentation:
+
+- [Architecture And Data Flow](./docs/ARCHITECTURE_AND_DATA_FLOW.md)
+- [Detailed Runtime Walkthrough](./docs/DETAILED_RUNTIME_WALKTHROUGH.md)
+- [Function Reference](./docs/FUNCTION_REFERENCE.md)
+
 This branch is currently optimized for practical local runtime use:
 - YOLO body tracking for both single-person and multi-person flows
 - ONNX hand tracking with fallback hands and anatomical cleanup
@@ -161,6 +167,14 @@ Single-person runs currently write:
 - FBX export
 ```
 
+The JSON export now includes Blender-facing rig metadata:
+
+```txt
+- skeleton hierarchy
+- normalized coordinate system (Z-up)
+- stable rest-joint positions
+```
+
 ## Multi-Person
 
 Single-camera multi-person runs currently write:
@@ -172,6 +186,23 @@ Single-camera multi-person runs currently write:
 ```
 
 Multi-person FBX export is not the default output path yet.
+Multi-person JSON export now carries the same normalized Blender metadata as single-person export.
+
+---
+
+# Blender Import
+
+Import a Kinara JSON clip into Blender as a real armature animation with:
+
+```bash
+blender --python .\blender_kinematics\import_kinara_motion.py -- --input .\outputs\your_clip.json
+```
+
+For multi-person files, import a specific label with:
+
+```bash
+blender --python .\blender_kinematics\import_kinara_motion.py -- --input .\outputs\your_clip.json --person person1
+```
 
 ---
 
