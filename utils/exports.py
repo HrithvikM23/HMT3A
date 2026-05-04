@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -129,6 +130,14 @@ HAND_NAME_TO_INDEX = {
     "Pinky4": 20,
 }
 
+DEFAULT_EXPORT_COORDINATE_SYSTEM: dict[str, object] = {
+    "space": "kinara_normalized",
+    "right_axis": "X",
+    "forward_axis": "Y",
+    "up_axis": "Z",
+    "grounded_axis": "Z",
+}
+
 
 def _to_world(x: int, y: int, z: float = 0.0) -> tuple[float, float, float]:
     return float(x), float(-y), float(z)
@@ -174,6 +183,15 @@ def _make_joint(x: float, y: float, z: float, confidence: float) -> JointValue:
 
 def _zero_joint() -> JointValue:
     return {"x": 0.0, "y": 0.0, "z": 0.0, "confidence": 0.0}
+
+
+def _copy_joint_value(joint_value: JointValue) -> JointValue:
+    return {
+        "x": float(joint_value["x"]),
+        "y": float(joint_value["y"]),
+        "z": float(joint_value["z"]),
+        "confidence": float(joint_value["confidence"]),
+    }
 
 
 def _lerp(start: float, end: float, alpha: float) -> float:
@@ -317,6 +335,16 @@ def _frame_joint_map(frame: dict[str, object]) -> JointMap:
     return cast(JointMap, frame["joints"])
 
 
+def _joint_is_valid(joint_value: JointValue, confidence_threshold: float = 0.05) -> bool:
+    if joint_value["confidence"] < confidence_threshold:
+        return False
+    return not (
+        math.isclose(joint_value["x"], 0.0)
+        and math.isclose(joint_value["y"], 0.0)
+        and math.isclose(joint_value["z"], 0.0)
+    )
+
+
 def _ground_joint_frames_on_axis(frames: list[dict[str, object]], axis: str) -> list[dict[str, object]]:
     min_value: float | None = None
     for frame in frames:
@@ -398,6 +426,157 @@ def _normalize_export_frames(frames: list[dict[str, object]]) -> list[dict[str, 
     return _ground_z_axis_frames(_z_up_joint_frames(frames))
 
 
+def _build_skeleton_metadata() -> list[dict[str, str | None]]:
+    return [{"name": joint.name, "parent": joint.parent} for joint in SKELETON]
+
+
+def _compute_rest_joints(frames: list[dict[str, object]]) -> JointMap:
+    if not frames:
+        return _empty_joint_map()
+
+    root_positions: list[tuple[float, float, float]] = []
+    root_confidences: list[float] = []
+    for frame in frames:
+        joint_map = _frame_joint_map(frame)
+        root_joint = joint_map.get("HipsRoot", _zero_joint())
+        if not _joint_is_valid(root_joint):
+            continue
+        root_positions.append((root_joint["x"], root_joint["y"], root_joint["z"]))
+        root_confidences.append(root_joint["confidence"])
+
+    if root_positions:
+        rest_joints: JointMap = {
+            "HipsRoot": _make_joint(
+                x=statistics.median(position[0] for position in root_positions),
+                y=statistics.median(position[1] for position in root_positions),
+                z=statistics.median(position[2] for position in root_positions),
+                confidence=statistics.median(root_confidences),
+            )
+        }
+    else:
+        rest_joints = {"HipsRoot": _zero_joint()}
+
+    for joint in SKELETON:
+        if joint.parent is None:
+            continue
+
+        delta_xs: list[float] = []
+        delta_ys: list[float] = []
+        delta_zs: list[float] = []
+        confidences: list[float] = []
+        for frame in frames:
+            joint_map = _frame_joint_map(frame)
+            parent_joint = joint_map.get(joint.parent, _zero_joint())
+            child_joint = joint_map.get(joint.name, _zero_joint())
+            if not _joint_is_valid(parent_joint) or not _joint_is_valid(child_joint):
+                continue
+            delta_xs.append(child_joint["x"] - parent_joint["x"])
+            delta_ys.append(child_joint["y"] - parent_joint["y"])
+            delta_zs.append(child_joint["z"] - parent_joint["z"])
+            confidences.append(min(parent_joint["confidence"], child_joint["confidence"]))
+
+        if delta_xs and delta_ys and delta_zs:
+            delta_x = float(statistics.median(delta_xs))
+            delta_y = float(statistics.median(delta_ys))
+            delta_z = float(statistics.median(delta_zs))
+            delta_length = math.sqrt((delta_x * delta_x) + (delta_y * delta_y) + (delta_z * delta_z))
+            if delta_length <= 1e-6:
+                delta_x, delta_y, delta_z = 0.0, 0.0, 0.05
+            confidence = float(statistics.median(confidences))
+        else:
+            delta_x, delta_y, delta_z = 0.0, 0.0, 0.05
+            confidence = 0.0
+
+        parent_rest = rest_joints[joint.parent]
+        rest_joints[joint.name] = _make_joint(
+            parent_rest["x"] + delta_x,
+            parent_rest["y"] + delta_y,
+            parent_rest["z"] + delta_z,
+            confidence,
+        )
+
+    return {joint.name: _copy_joint_value(rest_joints.get(joint.name, _zero_joint())) for joint in SKELETON}
+
+
+def _collect_multi_person_joint_tracks(frames: list[dict[str, object]]) -> dict[str, list[dict[str, object]]]:
+    person_frames: dict[str, list[dict[str, object]]] = {}
+
+    for fallback_index, frame in enumerate(frames):
+        frame_index = _coerce_frame_index(frame.get("frame_index"))
+        present_people = frame.get("people", [])
+        keyed_people: dict[str, JointMap] = {}
+        if isinstance(present_people, list):
+            for person_index, person in enumerate(present_people, start=1):
+                if not isinstance(person, dict):
+                    continue
+                label = str(person.get("label") or f"person{person.get('id', person_index)}")
+                person_key = _sanitize_person_label(label)
+                joints = person.get("joints")
+                if isinstance(joints, dict):
+                    keyed_people[person_key] = cast(JointMap, joints)
+
+        if frame_index == 0 and fallback_index != 0:
+            frame_index = fallback_index
+        for person_key in set(person_frames) | set(keyed_people):
+            joint_map = keyed_people.get(person_key, _empty_joint_map())
+            person_frames.setdefault(person_key, []).append(
+                {
+                    "frame_index": frame_index,
+                    "joints": joint_map,
+                }
+            )
+
+    return person_frames
+
+
+def _normalize_multi_person_frames(frames: list[dict[str, object]]) -> list[dict[str, object]]:
+    person_tracks = _collect_multi_person_joint_tracks(frames)
+    normalized_tracks = {
+        person_key: _normalize_export_frames(person_motion_frames)
+        for person_key, person_motion_frames in person_tracks.items()
+    }
+    normalized_frames: list[dict[str, object]] = []
+
+    for frame_offset, frame in enumerate(frames):
+        normalized_people: list[dict[str, object]] = []
+        raw_people = frame.get("people", [])
+        if isinstance(raw_people, list):
+            for person_index, person in enumerate(raw_people, start=1):
+                if not isinstance(person, dict):
+                    continue
+                label = str(person.get("label") or f"person{person.get('id', person_index)}")
+                person_key = _sanitize_person_label(label)
+                normalized_person = dict(person)
+                normalized_person["joints"] = _frame_joint_map(normalized_tracks[person_key][frame_offset])
+                normalized_people.append(normalized_person)
+
+        normalized_frame = dict(frame)
+        normalized_frame["people"] = normalized_people
+        normalized_frames.append(normalized_frame)
+
+    return normalized_frames
+
+
+def _build_export_metadata(
+    metadata: dict[str, object],
+    frames: list[dict[str, object]],
+    *,
+    multi_person: bool,
+) -> dict[str, object]:
+    enriched_metadata = dict(metadata)
+    enriched_metadata["skeleton"] = _build_skeleton_metadata()
+    enriched_metadata["coordinate_system"] = dict(DEFAULT_EXPORT_COORDINATE_SYSTEM)
+    if multi_person:
+        person_tracks = _collect_multi_person_joint_tracks(frames)
+        enriched_metadata["rest_joints"] = {
+            person_key: _compute_rest_joints(person_frames)
+            for person_key, person_frames in person_tracks.items()
+        }
+    else:
+        enriched_metadata["rest_joints"] = _compute_rest_joints(frames)
+    return enriched_metadata
+
+
 def _write_motion_json(
     output_path: Path,
     format_name: str,
@@ -425,7 +604,13 @@ def export_motion_json(
 ) -> None:
     if not frames_are_normalized:
         frames = _normalize_export_frames(frames)
-    _write_motion_json(output_path, "kinara-motion-json-v1", fps, frames, metadata)
+    _write_motion_json(
+        output_path,
+        "kinara-motion-json-v1",
+        fps,
+        frames,
+        _build_export_metadata(metadata, frames, multi_person=False),
+    )
 
 
 def export_multi_person_json(
@@ -433,8 +618,17 @@ def export_multi_person_json(
     fps: float,
     frames: list[dict[str, object]],
     metadata: dict[str, object],
+    frames_are_normalized: bool = False,
 ) -> None:
-    _write_motion_json(output_path, "kinara-multi-person-json-v1", fps, frames, metadata)
+    if not frames_are_normalized:
+        frames = _normalize_multi_person_frames(frames)
+    _write_motion_json(
+        output_path,
+        "kinara-multi-person-json-v1",
+        fps,
+        frames,
+        _build_export_metadata(metadata, frames, multi_person=True),
+    )
 
 
 def _sanitize_person_label(label: str) -> str:
@@ -468,30 +662,7 @@ def export_multi_person_fbx_bundle(
     if not frames:
         return []
 
-    person_frames: dict[str, list[dict[str, object]]] = {}
-
-    for frame in frames:
-        frame_index = _coerce_frame_index(frame.get("frame_index"))
-        present_people = frame.get("people", [])
-        keyed_people: dict[str, dict[str, object]] = {}
-        if isinstance(present_people, list):
-            for person in present_people:
-                if not isinstance(person, dict):
-                    continue
-                label = str(person.get("label") or f"person{person.get('id', '0')}")
-                person_key = _sanitize_person_label(label)
-                joints = person.get("joints")
-                if isinstance(joints, dict):
-                    keyed_people[person_key] = cast(dict[str, object], joints)
-
-        for person_key in set(person_frames) | set(keyed_people):
-            joint_map = keyed_people.get(person_key, _empty_joint_map())
-            person_frames.setdefault(person_key, []).append(
-                {
-                    "frame_index": frame_index,
-                    "joints": joint_map,
-                }
-            )
+    person_frames = _collect_multi_person_joint_tracks(frames)
 
     exported_paths: list[Path] = []
     suffix = output_path.suffix or ".fbx"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import importlib
+import importlib.util
 import os
 import shutil
 import site
@@ -25,6 +26,7 @@ except ImportError:  # pragma: no cover
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VENDOR_DIR = PROJECT_ROOT / f".vendor_py{sys.version_info.major}{sys.version_info.minor}"
 ULTRALYTICS_CONFIG_DIR = PROJECT_ROOT / ".ultralytics"
+WINDOWS_DLL_DIRECTORIES: list[object] = []
 
 REQUIRED_PROJECT_FILES = (
     Path("main.py"),
@@ -144,6 +146,24 @@ def _prepend_env_path(path: Path) -> bool:
         return False
 
     os.environ["PATH"] = os.pathsep.join([path_str, *parts]) if parts else path_str
+    return True
+
+
+def _register_windows_dll_directory(path: Path) -> bool:
+    if os.name != "nt" or not hasattr(os, "add_dll_directory"):
+        return False
+    if not path.exists() or not path.is_dir():
+        return False
+
+    normalized_candidate = os.path.normcase(os.path.normpath(str(path)))
+    for handle in WINDOWS_DLL_DIRECTORIES:
+        handle_path = getattr(handle, "_kinara_path", "")
+        if handle_path and os.path.normcase(os.path.normpath(handle_path)) == normalized_candidate:
+            return False
+
+    handle = os.add_dll_directory(str(path))
+    setattr(handle, "_kinara_path", str(path))
+    WINDOWS_DLL_DIRECTORIES.append(handle)
     return True
 
 
@@ -272,13 +292,63 @@ def _collect_runtime_roots() -> list[Path]:
     if cudnn_root.exists():
         roots.extend(path for path in cudnn_root.glob("v*") if path.is_dir())
 
+    local_cudnn_root = Path(os.environ.get("LOCALAPPDATA", "")) / "NVIDIA" / "CUDNN"
+    if local_cudnn_root.exists():
+        roots.extend(path for path in local_cudnn_root.glob("v*") if path.is_dir())
+
+    roots.extend(_collect_torch_runtime_roots())
+
     return _dedupe_paths(roots)
+
+
+def _collect_torch_runtime_roots() -> list[Path]:
+    roots: list[Path] = [VENDOR_DIR]
+
+    try:
+        roots.extend(Path(site_package) for site_package in site.getsitepackages())
+    except Exception:
+        pass
+
+    try:
+        user_site = site.getusersitepackages()
+    except Exception:
+        user_site = None
+    if user_site:
+        roots.append(Path(user_site))
+
+    torch_spec = importlib.util.find_spec("torch")
+    if torch_spec is not None and torch_spec.origin:
+        roots.append(Path(torch_spec.origin).resolve().parent.parent)
+
+    candidate_dirs: list[Path] = []
+    for root in _dedupe_paths([root for root in roots if root.exists()]):
+        candidate_dirs.extend(
+            [
+                root / "torch" / "lib",
+                root / "Lib" / "site-packages" / "torch" / "lib",
+            ]
+        )
+
+    return _dedupe_paths([candidate for candidate in candidate_dirs if candidate.exists() and candidate.is_dir()])
 
 
 def _bin_candidates(root: Path) -> list[Path]:
     candidates = [root]
     if root.name.lower() != "bin":
         candidates.append(root / "bin")
+    candidates.extend(
+        [
+            root / "lib",
+            root / "lib" / "x64",
+            root / "bin" / "x64",
+            root / "bin" / "12",
+            root / "bin" / "11",
+            root / "bin" / "10",
+        ]
+    )
+    bin_dir = root / "bin"
+    if bin_dir.exists() and bin_dir.is_dir():
+        candidates.extend(candidate for candidate in bin_dir.iterdir() if candidate.is_dir())
     return _dedupe_paths([candidate for candidate in candidates if candidate.exists() and candidate.is_dir()])
 
 
@@ -339,6 +409,7 @@ def _repair_runtime_paths(report: RuntimeReport, persist: bool) -> None:
     for candidate_dir in candidate_dirs:
         if _prepend_env_path(candidate_dir):
             report.path_updates.append(candidate_dir)
+        _register_windows_dll_directory(candidate_dir)
 
     if report.cuda_bin_dirs and "CUDA_PATH" not in os.environ:
         cuda_root = report.cuda_bin_dirs[0].parent if report.cuda_bin_dirs[0].name.lower() == "bin" else report.cuda_bin_dirs[0]
@@ -450,7 +521,13 @@ def _probe_runtime(report: RuntimeReport) -> tuple[list[ModuleStatus], list[str]
 
             providers = set(ort.get_available_providers())
             if _distribution_installed("onnxruntime-gpu") and "CUDAExecutionProvider" not in providers:
-                warnings.append("onnxruntime-gpu is installed but CUDAExecutionProvider is unavailable; Kinara will use CPU for hand inference.")
+                discovered_dirs = _dedupe_paths([*report.cudnn_bin_dirs, *report.cuda_bin_dirs])
+                joined_dirs = ", ".join(str(path) for path in discovered_dirs[:4])
+                detail = f" Checked runtime dirs: {joined_dirs}." if joined_dirs else ""
+                warnings.append(
+                    "onnxruntime-gpu is installed but CUDAExecutionProvider is unavailable; "
+                    f"Kinara will use CPU for hand inference.{detail}"
+                )
         except Exception as exc:
             warnings.append(f"Could not inspect ONNX Runtime providers: {type(exc).__name__}: {exc}")
 
