@@ -4,139 +4,21 @@ import json
 import math
 import re
 import statistics
-from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-
-FBX_TIME_UNIT = 46186158000
-
-
-@dataclass(frozen=True, slots=True)
-class JointSpec:
-    name: str
-    parent: str | None
-
-
-Point = tuple[int, int, float]
-JointValue = dict[str, float]
-JointMap = dict[str, JointValue]
-FACE_POINT_INDICES = (0, 1, 2, 3, 4)
-
-
-SKELETON: tuple[JointSpec, ...] = (
-    JointSpec("HipsRoot", None),
-    JointSpec("LeftHip", "HipsRoot"),
-    JointSpec("LeftKnee", "LeftHip"),
-    JointSpec("LeftAnkle", "LeftKnee"),
-    JointSpec("LeftFoot", "LeftAnkle"),
-    JointSpec("LeftToeBase", "LeftFoot"),
-    JointSpec("RightHip", "HipsRoot"),
-    JointSpec("RightKnee", "RightHip"),
-    JointSpec("RightAnkle", "RightKnee"),
-    JointSpec("RightFoot", "RightAnkle"),
-    JointSpec("RightToeBase", "RightFoot"),
-    JointSpec("Chest", "HipsRoot"),
-    JointSpec("Neck", "Chest"),
-    JointSpec("Head", "Neck"),
-    JointSpec("LeftShoulder", "Chest"),
-    JointSpec("LeftElbow", "LeftShoulder"),
-    JointSpec("LeftWrist", "LeftElbow"),
-    JointSpec("LeftThumb1", "LeftWrist"),
-    JointSpec("LeftThumb2", "LeftThumb1"),
-    JointSpec("LeftThumb3", "LeftThumb2"),
-    JointSpec("LeftThumb4", "LeftThumb3"),
-    JointSpec("LeftIndex1", "LeftWrist"),
-    JointSpec("LeftIndex2", "LeftIndex1"),
-    JointSpec("LeftIndex3", "LeftIndex2"),
-    JointSpec("LeftIndex4", "LeftIndex3"),
-    JointSpec("LeftMiddle1", "LeftWrist"),
-    JointSpec("LeftMiddle2", "LeftMiddle1"),
-    JointSpec("LeftMiddle3", "LeftMiddle2"),
-    JointSpec("LeftMiddle4", "LeftMiddle3"),
-    JointSpec("LeftRing1", "LeftWrist"),
-    JointSpec("LeftRing2", "LeftRing1"),
-    JointSpec("LeftRing3", "LeftRing2"),
-    JointSpec("LeftRing4", "LeftRing3"),
-    JointSpec("LeftPinky1", "LeftWrist"),
-    JointSpec("LeftPinky2", "LeftPinky1"),
-    JointSpec("LeftPinky3", "LeftPinky2"),
-    JointSpec("LeftPinky4", "LeftPinky3"),
-    JointSpec("RightShoulder", "Chest"),
-    JointSpec("RightElbow", "RightShoulder"),
-    JointSpec("RightWrist", "RightElbow"),
-    JointSpec("RightThumb1", "RightWrist"),
-    JointSpec("RightThumb2", "RightThumb1"),
-    JointSpec("RightThumb3", "RightThumb2"),
-    JointSpec("RightThumb4", "RightThumb3"),
-    JointSpec("RightIndex1", "RightWrist"),
-    JointSpec("RightIndex2", "RightIndex1"),
-    JointSpec("RightIndex3", "RightIndex2"),
-    JointSpec("RightIndex4", "RightIndex3"),
-    JointSpec("RightMiddle1", "RightWrist"),
-    JointSpec("RightMiddle2", "RightMiddle1"),
-    JointSpec("RightMiddle3", "RightMiddle2"),
-    JointSpec("RightMiddle4", "RightMiddle3"),
-    JointSpec("RightRing1", "RightWrist"),
-    JointSpec("RightRing2", "RightRing1"),
-    JointSpec("RightRing3", "RightRing2"),
-    JointSpec("RightRing4", "RightRing3"),
-    JointSpec("RightPinky1", "RightWrist"),
-    JointSpec("RightPinky2", "RightPinky1"),
-    JointSpec("RightPinky3", "RightPinky2"),
-    JointSpec("RightPinky4", "RightPinky3"),
+from utils.body_geometry import derive_foot_points
+from utils.skeleton import (
+    BODY_NAME_TO_INDEX,
+    DEFAULT_EXPORT_COORDINATE_SYSTEM,
+    FACE_POINT_INDICES,
+    FBX_TIME_UNIT,
+    HAND_NAME_TO_INDEX,
+    SKELETON,
+    JointMap,
+    JointValue,
+    Point,
 )
-
-SKELETON_BY_NAME = {joint.name: joint for joint in SKELETON}
-CHILDREN_BY_PARENT: dict[str | None, list[str]] = {}
-for joint in SKELETON:
-    CHILDREN_BY_PARENT.setdefault(joint.parent, []).append(joint.name)
-
-BODY_NAME_TO_INDEX = {
-    "LeftShoulder": 5,
-    "RightShoulder": 6,
-    "LeftElbow": 7,
-    "RightElbow": 8,
-    "LeftWrist": 9,
-    "RightWrist": 10,
-    "LeftHip": 11,
-    "RightHip": 12,
-    "LeftKnee": 13,
-    "RightKnee": 14,
-    "LeftAnkle": 15,
-    "RightAnkle": 16,
-}
-
-HAND_NAME_TO_INDEX = {
-    "Thumb1": 1,
-    "Thumb2": 2,
-    "Thumb3": 3,
-    "Thumb4": 4,
-    "Index1": 5,
-    "Index2": 6,
-    "Index3": 7,
-    "Index4": 8,
-    "Middle1": 9,
-    "Middle2": 10,
-    "Middle3": 11,
-    "Middle4": 12,
-    "Ring1": 13,
-    "Ring2": 14,
-    "Ring3": 15,
-    "Ring4": 16,
-    "Pinky1": 17,
-    "Pinky2": 18,
-    "Pinky3": 19,
-    "Pinky4": 20,
-}
-
-DEFAULT_EXPORT_COORDINATE_SYSTEM: dict[str, object] = {
-    "space": "kinara_normalized",
-    "right_axis": "X",
-    "forward_axis": "Y",
-    "up_axis": "Z",
-    "grounded_axis": "Z",
-}
 
 
 def _to_world(x: int, y: int, z: float = 0.0) -> tuple[float, float, float]:
@@ -243,23 +125,9 @@ def _derive_foot_chain(
     ankle_point: Point,
     foot_depth: float,
 ) -> tuple[JointValue, JointValue]:
-    dx = float(ankle_point[0] - knee_point[0])
-    dy = float(ankle_point[1] - knee_point[1])
-    shin_length = math.hypot(dx, dy)
-    if shin_length <= 1e-6:
-        unit_x, unit_y = 0.0, 1.0
-        shin_length = 24.0
-    else:
-        unit_x = dx / shin_length
-        unit_y = dy / shin_length
-
-    foot_length = max(shin_length * 0.35, 12.0)
-    toe_length = max(shin_length * 0.25, 10.0)
-    foot_x = float(ankle_point[0]) + unit_x * foot_length
-    foot_y = float(ankle_point[1]) + unit_y * foot_length
-    toe_x = foot_x + unit_x * toe_length
-    toe_y = foot_y + unit_y * toe_length
-    derived_conf = min(float(knee_point[2]), float(ankle_point[2]))
+    foot_point, toe_point = derive_foot_points(knee_point, ankle_point)
+    foot_x, foot_y, derived_conf = foot_point
+    toe_x, toe_y, _ = toe_point
 
     foot_world = _to_world_float(foot_x, foot_y, foot_depth)
     toe_world = _to_world_float(toe_x, toe_y, foot_depth)
@@ -673,72 +541,6 @@ def export_multi_person_fbx_bundle(
         exported_paths.append(person_output_path)
 
     return exported_paths
-
-
-def _compute_offsets(first_local_frame: dict[str, dict[str, float]]) -> dict[str, tuple[float, float, float]]:
-    offsets = {}
-    for joint in SKELETON:
-        current = first_local_frame[joint.name]
-        offsets[joint.name] = (current["x"], current["y"], current["z"])
-    return offsets
-
-
-def _build_bvh_hierarchy_lines(joint_name: str, offsets: dict[str, tuple[float, float, float]], indent: int = 0) -> list[str]:
-    joint = SKELETON_BY_NAME[joint_name]
-    prefix = "  " * indent
-    lines: list[str] = []
-    joint_label = "ROOT" if joint.parent is None else "JOINT"
-    lines.append(f"{prefix}{joint_label} {joint_name}")
-    lines.append(f"{prefix}{{")
-    ox, oy, oz = offsets[joint_name]
-    lines.append(f"{prefix}  OFFSET {ox:.6f} {oy:.6f} {oz:.6f}")
-    if joint.parent is None:
-        lines.append(
-            f"{prefix}  CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation"
-        )
-    else:
-        lines.append(f"{prefix}  CHANNELS 3 Xposition Yposition Zposition")
-
-    children = CHILDREN_BY_PARENT.get(joint_name, [])
-    if not children:
-        lines.append(f"{prefix}  End Site")
-        lines.append(f"{prefix}  {{")
-        lines.append(f"{prefix}    OFFSET 0.000000 0.000000 0.000000")
-        lines.append(f"{prefix}  }}")
-    else:
-        for child_name in children:
-            lines.extend(_build_bvh_hierarchy_lines(child_name, offsets, indent + 1))
-    lines.append(f"{prefix}}}")
-    return lines
-
-
-def export_motion_bvh(output_path: Path, fps: float, frames: list[dict[str, object]], frames_are_normalized: bool = False) -> None:
-    if not frames:
-        return
-
-    if not frames_are_normalized:
-        frames = _normalize_export_frames(frames)
-    local_frames = [_localize_joint_map(_frame_joint_map(frame)) for frame in frames]
-    offsets = _compute_offsets(local_frames[0])
-
-    hierarchy_lines = ["HIERARCHY"]
-    hierarchy_lines.extend(_build_bvh_hierarchy_lines("HipsRoot", offsets))
-    hierarchy_lines.append("MOTION")
-    hierarchy_lines.append(f"Frames: {len(local_frames)}")
-    hierarchy_lines.append(f"Frame Time: {1.0 / max(fps, 1.0):.8f}")
-
-    for local_frame in local_frames:
-        values: list[str] = []
-        for joint in SKELETON:
-            current = local_frame[joint.name]
-            values.append(f"{current['x']:.6f}")
-            values.append(f"{current['y']:.6f}")
-            values.append(f"{current['z']:.6f}")
-            if joint.parent is None:
-                values.extend(("0.000000", "0.000000", "0.000000"))
-        hierarchy_lines.append(" ".join(values))
-
-    output_path.write_text("\n".join(hierarchy_lines) + "\n", encoding="utf-8")
 
 
 def _fbx_template_header() -> list[str]:

@@ -1,0 +1,264 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from cli import InputAssignment, sanitize_label
+from config import PipelineConfig
+from utils.model_assets import DEFAULT_BODY_MODEL, HAND_MODEL_SPECS, ensure_body_model_file, ensure_model_file
+
+
+DEFAULT_PROVIDER_NAMES = ("CUDAExecutionProvider",)
+
+
+def prepare_model_assets(config: PipelineConfig) -> None:
+    hand_spec = HAND_MODEL_SPECS[config.hand_model_variant]
+
+    if config.body_model_path is None:
+        config.body_model_path = config.body_model_variant or DEFAULT_BODY_MODEL
+    config.body_model_path = ensure_body_model_file(config.project_root, str(config.body_model_path))
+
+    if config.hand_model_path is None:
+        print(f"Preparing hand model preset '{config.hand_model_variant}'...")
+        config.hand_model_path = ensure_model_file(config.project_root, hand_spec)
+        config.hand_input_size = hand_spec.input_size
+        config.hand_input_name = hand_spec.input_name
+        config.hand_input_dtype = hand_spec.input_dtype
+
+
+def resolve_output_basename(base_name: str | None, source: int | Path, label: str, multi_input: bool) -> str | None:
+    if base_name is not None:
+        cleaned = base_name.strip()
+        return f"{cleaned}_{sanitize_label(label)}" if multi_input else cleaned
+
+    stem = source.stem if isinstance(source, Path) else f"webcam_{source}"
+    return f"{stem}_{sanitize_label(label)}" if multi_input else stem
+
+
+def resolve_output_path(output_path: Path | None, label: str, multi_input: bool) -> Path | None:
+    if output_path is None:
+        return None
+    if not multi_input:
+        return output_path
+    return output_path.with_name(f"{output_path.stem}_{sanitize_label(label)}{output_path.suffix or '.mp4'}")
+
+
+def resolve_fused_output_basename(base_name: str | None, assignments: list[InputAssignment]) -> str | None:
+    if base_name is not None:
+        return f"{base_name.strip()}_fused"
+
+    front_assignment = next((assignment for assignment in assignments if assignment.label == "FRONT"), assignments[0])
+    if isinstance(front_assignment.source, Path):
+        return f"{front_assignment.source.stem}_fused"
+    return f"webcam_{front_assignment.source}_fused"
+
+
+def resolve_fused_output_path(output_path: Path | None) -> Path | None:
+    if output_path is None:
+        return None
+    return output_path.with_name(f"{output_path.stem}_fused{output_path.suffix or '.mp4'}")
+
+
+def validate_config(config: PipelineConfig) -> bool:
+    missing_paths = [
+        path for path in (config.hand_model_path,)
+        if path is not None and not Path(path).exists()
+    ]
+    if missing_paths:
+        for path in missing_paths:
+            print(f"Error: model file not found: {path}")
+        return False
+    if config.osc_port < 1 or config.osc_port > 65535:
+        print(f"Error: invalid OSC port: {config.osc_port}")
+        return False
+    if config.fallback_fps <= 0:
+        print(f"Error: fallback FPS must be positive: {config.fallback_fps}")
+        return False
+    if len(config.output_fourcc) < 4:
+        print(f"Error: output FourCC must have at least 4 characters: {config.output_fourcc}")
+        return False
+    if config.output_basename is not None and not config.output_basename.strip():
+        print("Error: output basename must not be empty.")
+        return False
+
+    bounded_float_fields = {
+        "body_smoothing_alpha": config.body_smoothing_alpha,
+        "hand_smoothing_alpha": config.hand_smoothing_alpha,
+        "hold_confidence_decay": config.hold_confidence_decay,
+        "body_conf_threshold": config.body_conf_threshold,
+        "body_iou_threshold": config.body_iou_threshold,
+        "hand_det_threshold": config.hand_det_threshold,
+        "hand_kp_threshold": config.hand_kp_threshold,
+        "identity_min_score": config.identity_min_score,
+        "person_cross_wrist_ratio": config.person_cross_wrist_ratio,
+        "triangulation_smoothing_alpha": config.triangulation_smoothing_alpha,
+    }
+    for field_name, value in bounded_float_fields.items():
+        if value <= 0 or value > 1:
+            print(f"Error: {field_name} must be in the range (0, 1]: {value}")
+            return False
+
+    positive_int_fields = {
+        "body_input_size": config.body_input_size,
+        "hand_input_size": config.hand_input_size,
+        "hand_box_min_size": config.hand_box_min_size,
+        "body_line_thickness": config.body_line_thickness,
+        "body_point_radius": config.body_point_radius,
+        "hand_box_thickness": config.hand_box_thickness,
+        "hand_line_thickness": config.hand_line_thickness,
+        "hand_point_radius": config.hand_point_radius,
+        "body_hold_frames": config.body_hold_frames,
+        "hand_hold_frames": config.hand_hold_frames,
+        "max_people": config.max_people,
+        "person_track_hold_frames": config.person_track_hold_frames,
+        "body_detect_interval": config.body_detect_interval,
+        "hand_detect_interval": config.hand_detect_interval,
+    }
+    for field_name, value in positive_int_fields.items():
+        if value <= 0:
+            print(f"Error: {field_name} must be positive: {value}")
+            return False
+    if config.person_box_scale <= 0:
+        print(f"Error: person_box_scale must be positive: {config.person_box_scale}")
+        return False
+    if config.person_match_threshold <= 0:
+        print(f"Error: person_match_threshold must be positive: {config.person_match_threshold}")
+        return False
+    if config.fused_depth_scale <= 0:
+        print(f"Error: fused_depth_scale must be positive: {config.fused_depth_scale}")
+        return False
+    if config.enable_3d_triangulation and config.calibration_3d_path is None:
+        print("Error: --triangulate-3d requires --calibration-3d.")
+        return False
+    if config.calibration_3d_path is not None and not Path(config.calibration_3d_path).exists():
+        print(f"Error: 3D calibration file not found: {config.calibration_3d_path}")
+        return False
+    if config.triangulation_min_cameras < 2:
+        print(f"Error: triangulation_min_cameras must be at least 2: {config.triangulation_min_cameras}")
+        return False
+    if config.triangulation_max_cameras_to_drop < 0:
+        print(
+            "Error: triangulation_max_cameras_to_drop must be zero or greater: "
+            f"{config.triangulation_max_cameras_to_drop}"
+        )
+        return False
+    if config.triangulation_reprojection_error <= 0:
+        print(f"Error: triangulation_reprojection_error must be positive: {config.triangulation_reprojection_error}")
+        return False
+    if config.triangulation_max_error is not None and config.triangulation_max_error <= 0:
+        print(f"Error: triangulation_max_error must be positive: {config.triangulation_max_error}")
+        return False
+    if config.hand_crop_retries < 0:
+        print(f"Error: hand_crop_retries must be zero or greater: {config.hand_crop_retries}")
+        return False
+    if config.fps_log_interval < 0:
+        print(f"Error: fps_log_interval must be zero or greater: {config.fps_log_interval}")
+        return False
+    return True
+
+
+def prepare_runtime_config(config: PipelineConfig) -> bool:
+    try:
+        prepare_model_assets(config)
+    except Exception as exc:
+        print(f"Error: failed to prepare model assets: {exc}")
+        return False
+    return validate_config(config)
+
+
+def _build_pipeline_config(
+    args: argparse.Namespace,
+    *,
+    video_path: int | Path,
+    output_path: Path | None,
+    output_basename: str | None,
+    preview_window_title: str,
+) -> PipelineConfig:
+    calibration_3d_path = args.calibration_3d
+    return PipelineConfig(
+        video_path=video_path,
+        output_path=output_path,
+        output_directory=args.output_dir,
+        output_basename=output_basename,
+        body_model_path=args.model,
+        hand_model_path=args.hand_model,
+        body_model_variant=args.model or DEFAULT_BODY_MODEL,
+        hand_model_variant=args.hand_model_variant,
+        hand_input_name=args.hand_input_name,
+        hand_input_dtype="float32",
+        body_input_size=args.body_input_size,
+        hand_input_size=args.hand_input_size,
+        body_conf_threshold=args.body_conf_threshold,
+        body_iou_threshold=args.body_iou_threshold,
+        hand_det_threshold=args.hand_det_threshold,
+        hand_kp_threshold=args.hand_kp_threshold,
+        hand_box_min_size=args.hand_box_min_size,
+        hand_box_scale=args.hand_box_scale,
+        enable_preview=not args.no_preview,
+        provider_names=tuple(args.providers) if args.providers else DEFAULT_PROVIDER_NAMES,
+        preview_window_title=preview_window_title,
+        osc_host=args.osc_host,
+        osc_port=args.osc_port,
+        osc_enabled=args.osc_enabled,
+        fallback_fps=args.fallback_fps,
+        output_fourcc=args.output_fourcc,
+        body_line_color=args.body_line_color,
+        body_point_color=args.body_point_color,
+        hand_box_color=args.hand_box_color,
+        hand_line_color=args.hand_line_color,
+        hand_point_color=args.hand_point_color,
+        body_line_thickness=args.body_line_thickness,
+        body_point_radius=args.body_point_radius,
+        hand_box_thickness=args.hand_box_thickness,
+        hand_line_thickness=args.hand_line_thickness,
+        hand_point_radius=args.hand_point_radius,
+        body_smoothing_alpha=args.body_smoothing_alpha,
+        hand_smoothing_alpha=args.hand_smoothing_alpha,
+        body_hold_frames=args.body_hold_frames,
+        hand_hold_frames=args.hand_hold_frames,
+        hold_confidence_decay=args.hold_confidence_decay,
+        max_people=args.max_people,
+        person_box_scale=args.person_box_scale,
+        person_track_hold_frames=args.person_track_hold_frames,
+        person_match_threshold=args.person_match_threshold,
+        person_cross_wrist_ratio=args.person_cross_wrist_ratio,
+        camera_calibration_path=args.camera_calibration,
+        calibration_3d_path=calibration_3d_path,
+        enable_3d_triangulation=args.triangulate_3d,
+        triangulation_min_cameras=args.triangulation_min_cameras,
+        triangulation_use_outlier_rejection=args.triangulation_use_outlier_rejection,
+        triangulation_max_cameras_to_drop=args.triangulation_max_cameras_to_drop,
+        triangulation_reprojection_error=args.triangulation_reprojection_error,
+        triangulation_max_error=args.triangulation_max_error,
+        triangulation_smoothing_alpha=args.triangulation_smoothing_alpha,
+        sync_offsets={label.upper(): offset for label, offset in (args.sync_offsets or [])},
+        fused_depth_scale=args.fused_depth_scale,
+        yolo_tracker=args.yolo_tracker,
+        yolo_device=args.yolo_device,
+        body_detect_interval=args.body_detect_interval,
+        hand_detect_interval=args.hand_detect_interval,
+        hand_crop_retries=args.hand_crop_retries,
+        fps_log_interval=args.fps_log_interval,
+        identity_hints=dict(args.identity_hints or []),
+    )
+
+
+def build_config_for_assignment(args: argparse.Namespace, assignment: InputAssignment, multi_input: bool) -> PipelineConfig:
+    return _build_pipeline_config(
+        args,
+        video_path=assignment.source,
+        output_path=resolve_output_path(args.output, assignment.label, multi_input),
+        output_basename=resolve_output_basename(args.output_basename, assignment.source, assignment.label, multi_input),
+        preview_window_title=f"{args.preview_title} - {assignment.label}" if multi_input else args.preview_title,
+    )
+
+
+def build_fused_config(args: argparse.Namespace, assignments: list[InputAssignment]) -> PipelineConfig:
+    reference_assignment = next((assignment for assignment in assignments if assignment.label == "FRONT"), assignments[0])
+    return _build_pipeline_config(
+        args,
+        video_path=reference_assignment.source,
+        output_path=resolve_fused_output_path(args.output),
+        output_basename=resolve_fused_output_basename(args.output_basename, assignments),
+        preview_window_title=f"{args.preview_title} - FUSED",
+    )

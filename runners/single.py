@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+import cv2
+
+from camera.capture import VideoCaptureSession
+from config import PipelineConfig
+from inference.rtmpose import ONNXPoseHandRunner
+from network.osc_sender import OSCSender
+from pipeline.pipeline import PoseHandPipeline
+from runtime_config import prepare_runtime_config
+from runners.common import export_motion_bundle, print_saved_paths
+from runners.multi_person import run_multi_person_assignment
+from utils.exports import build_joint_map
+from utils.fps import FpsMeter
+from utils.smoothing import LandmarkSmoother
+
+
+def run_assignment(config: PipelineConfig) -> None:
+    if config.max_people > 1:
+        run_multi_person_assignment(config)
+        return
+    if not prepare_runtime_config(config):
+        return
+
+    assert config.output_path is not None
+    session = VideoCaptureSession(
+        config.video_path,
+        config.output_path,
+        fallback_fps=config.fallback_fps,
+        output_fourcc=config.output_fourcc,
+    )
+    runner = ONNXPoseHandRunner(config)
+    smoother = LandmarkSmoother(config)
+    osc_sender = OSCSender(config.osc_host, config.osc_port, config.osc_enabled)
+    pipeline = PoseHandPipeline(config, runner, smoother, osc_sender)
+    motion_frames: list[dict[str, object]] = []
+    frame_index = 0
+    fps_meter = FpsMeter("single", config.fps_log_interval)
+
+    try:
+        while True:
+            ok, frame = session.read()
+            if not ok or frame is None:
+                break
+
+            body_points, hands_by_side = pipeline.detect_pose(frame)
+            joints = build_joint_map(body_points, hands_by_side)
+            pipeline.render_pose(frame, body_points, hands_by_side, send_osc=False)
+            osc_sender.send_pose(
+                body_points,
+                hands_by_side,
+                joints=joints,
+                metadata={
+                    "frame_index": frame_index,
+                    "mode": "single",
+                    "source": str(config.video_path),
+                },
+            )
+            motion_frames.append({"frame_index": frame_index, "joints": joints})
+            fps_meter.tick(frame_index)
+            frame_index += 1
+            session.write(frame)
+
+            if config.enable_preview:
+                cv2.imshow(config.preview_window_title, frame)
+                if cv2.waitKey(1) & 0xFF == 27:
+                    break
+    finally:
+        session.close()
+        osc_sender.close()
+        cv2.destroyAllWindows()
+
+    export_motion_bundle(
+        config,
+        fps=session.fps,
+        frames=motion_frames,
+        metadata={
+            "mode": "single",
+            "source": str(config.video_path),
+            "body_model_variant": config.body_model_variant,
+            "hand_model_variant": config.hand_model_variant,
+        },
+    )
+    print_saved_paths(config.output_path, config.json_output_path, config.fbx_output_path)

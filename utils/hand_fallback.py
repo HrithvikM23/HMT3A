@@ -78,16 +78,23 @@ def is_hand_detection_valid(
         return False
 
     max_radial = max(math.hypot(point[0] - wrist_xy[0], point[1] - wrist_xy[1]) for point in hand_points[1:])
-    if max_radial > forearm_len * 1.75:
+    if max_radial > max(forearm_len * 2.40, config.hand_box_min_size * 1.20):
         return False
 
     palm_indices = (5, 9, 13, 17)
     palm_distances = [math.hypot(hand_points[index][0] - wrist_xy[0], hand_points[index][1] - wrist_xy[1]) for index in palm_indices]
     average_palm_distance = sum(palm_distances) / len(palm_distances)
-    if average_palm_distance < forearm_len * 0.10 or average_palm_distance > forearm_len * 1.10:
+    if average_palm_distance < forearm_len * 0.04 or average_palm_distance > max(forearm_len * 1.60, config.hand_box_min_size * 0.45):
         return False
 
     return True
+
+
+def has_usable_hand_detection(hand_points: list[Point] | None, config) -> bool:
+    if hand_points is None or len(hand_points) != 21:
+        return False
+    minimum_points = max(5, config.hand_min_valid_points // 2)
+    return sum(point[2] > config.hand_kp_threshold * 0.25 for point in hand_points) >= minimum_points
 
 
 def generate_default_hand(

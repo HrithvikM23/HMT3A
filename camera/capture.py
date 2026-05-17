@@ -21,6 +21,12 @@ class VideoInputSource:
     def read(self):
         return self.cap.read()
 
+    def skip_frames(self, frame_count: int) -> None:
+        for _ in range(max(0, frame_count)):
+            ok, _ = self.cap.read()
+            if not ok:
+                break
+
     def close(self) -> None:
         self.cap.release()
 

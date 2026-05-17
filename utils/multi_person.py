@@ -8,13 +8,13 @@ import numpy as np
 
 from network.osc_sender import OSCSender
 from pipeline.pipeline import PoseHandPipeline
+from utils.color_profile import ColorProfile, color_profile_similarity
 from utils.hand_constraints import enforce_hand_constraints
 from utils.hand_fallback import generate_default_hand
 from utils.smoothing import LandmarkSmoother
 
 Point = tuple[int, int, float]
 Box = tuple[int, int, int, int]
-ColorProfile = dict[str, float]
 
 COLOR_HSV_RANGES: dict[str, tuple[tuple[int, int, int], tuple[int, int, int]]] = {
     "black": ((0, 0, 0), (180, 255, 60)),
@@ -169,21 +169,6 @@ def _blend_color_scores(previous: ColorProfile, current: ColorProfile, alpha: fl
     return blended
 
 
-def color_profile_similarity(profile_a: ColorProfile, profile_b: ColorProfile) -> float:
-    if not profile_a or not profile_b:
-        return 0.0
-    overlap = 0.0
-    magnitude = 0.0
-    for key in COLOR_NAMES:
-        value_a = profile_a.get(key, 0.0)
-        value_b = profile_b.get(key, 0.0)
-        overlap += min(value_a, value_b)
-        magnitude += max(value_a, value_b)
-    if magnitude <= 0:
-        return 0.0
-    return overlap / magnitude
-
-
 def _translate_body_points(points: list[Point], offset_x: int, offset_y: int) -> list[Point]:
     return [(x + offset_x, y + offset_y, conf) for x, y, conf in points]
 
@@ -205,12 +190,41 @@ class MultiPersonTracker:
         self.runner = runner
         self._tracks: list[PersonTrack] = []
         self._next_id = 1
+        self._frame_index = 0
 
     def update(self, frame) -> list[PersonTrack]:
-        detections = self._detect_people(frame)
-        self._associate_tracks(frame, detections)
+        if self._should_run_person_model():
+            detections = self._detect_people(frame)
+            self._associate_tracks(frame, detections)
+        else:
+            self._predict_tracks(frame)
         self._resolve_cross_person_hands()
+        self._frame_index += 1
         return [track for track in self._tracks if track.missed_frames == 0 and track.body_points]
+
+    def _should_run_person_model(self) -> bool:
+        return not self._tracks or self._frame_index % self.config.body_detect_interval == 0
+
+    def _predict_tracks(self, frame) -> None:
+        updated_tracks: list[PersonTrack] = []
+        for track in self._tracks:
+            if track.missed_frames != 0:
+                track.missed_frames += 1
+                if track.missed_frames <= self.config.person_track_hold_frames:
+                    updated_tracks.append(track)
+                continue
+
+            vx, vy = track.velocity
+            offset_x = int(round(vx))
+            offset_y = int(round(vy))
+            x1, y1, x2, y2 = track.box
+            track.box = (x1 + offset_x, y1 + offset_y, x2 + offset_x, y2 + offset_y)
+            track.body_points = _translate_body_points(track.body_points, offset_x, offset_y)
+            track.hands_by_side = track.pipeline.detect_hands(frame, track.body_points)
+            track.detection_score *= self.config.hold_confidence_decay
+            updated_tracks.append(track)
+
+        self._tracks = updated_tracks[: self.config.max_people]
 
     def _detect_people(self, frame) -> list[PersonDetection]:
         raw_detections = self.runner.detect_bodies(frame, max_people=self.config.max_people, track=True)

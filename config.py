@@ -19,8 +19,6 @@ class PipelineConfig:
     output_path: Path | None = None
     output_directory: Path | None = None
     output_basename: str | None = None
-    body_input_name: str = "input"
-    body_input_dtype: str = "int32"
     hand_input_name: str = "images"
     hand_input_dtype: str = "float32"
     body_input_size: int = 960
@@ -37,7 +35,6 @@ class PipelineConfig:
     hand_default_confidence: float = 0.55
     hand_default_scale: float = 0.85
     max_people: int = 1
-    person_detector_scale: float = 1.05
     person_box_scale: float = 1.15
     person_track_hold_frames: int = 10
     identity_hints: dict[str, tuple[str, ...]] = field(default_factory=dict)
@@ -45,9 +42,22 @@ class PipelineConfig:
     person_match_threshold: float = 0.15
     person_cross_wrist_ratio: float = 0.90
     camera_calibration_path: Path | None = None
+    calibration_3d_path: Path | None = None
+    enable_3d_triangulation: bool = False
+    triangulation_min_cameras: int = 2
+    triangulation_use_outlier_rejection: bool = False
+    triangulation_max_cameras_to_drop: int = 1
+    triangulation_reprojection_error: float = 0.01
+    triangulation_max_error: float | None = None
+    triangulation_smoothing_alpha: float = 0.65
+    sync_offsets: dict[str, int] = field(default_factory=dict)
     fused_depth_scale: float = 1.0
     yolo_tracker: str = "botsort.yaml"
     yolo_device: str | None = None
+    body_detect_interval: int = 1
+    hand_detect_interval: int = 1
+    hand_crop_retries: int = 3
+    fps_log_interval: float = 0.0
     enable_preview: bool = True
     provider_names: tuple[str, ...] = ("CUDAExecutionProvider",)
     preview_window_title: str = "Pose + Hand Landmarks"
