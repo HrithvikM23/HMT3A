@@ -19,7 +19,7 @@ If you are brand new to the repo:
 1. Read this file first for the big picture.
 2. Read [Detailed Runtime Walkthrough](./DETAILED_RUNTIME_WALKTHROUGH.md) next for a story-like execution trace.
 3. Read [Function Reference](./FUNCTION_REFERENCE.md) when you need symbol-level detail.
-4. Open `main.py`, then follow the call chains mentioned here.
+4. Open `main.py`, then follow the call chains into `cli.py`, `runtime_config.py`, and `runners/`.
 
 ## System Goal
 
@@ -35,20 +35,24 @@ At a high level, Kinara does five jobs:
 
 | Module | Main responsibility | Consumes | Produces |
 | --- | --- | --- | --- |
-| `main.py` | CLI, mode selection, top-level loops | CLI args, input sources | runtime sessions, exported files |
+| `main.py` | Bootstrap and mode selection | CLI args, input sources | delegated runtime session |
+| `cli.py` | CLI parsing and source selection | argv, interactive prompts | input assignments |
+| `runtime_config.py` | Model prep and config validation | CLI namespace, source assignment | `PipelineConfig` |
+| `runners/` | Single, multi-person, and fused loops | `PipelineConfig`, frames | rendered video, live packets, exports |
+| `utils/bootstrap_*` | Startup dependency, CUDA, and environment checks | local Python environment | repaired process paths, install plan |
 | `config.py` | Central runtime config and drawing constants | CLI-derived values | `PipelineConfig` |
 | `camera/capture.py` | OpenCV capture and writer wrappers | webcam index or video path | frames, MP4 writer |
 | `inference/rtmpose.py` | Body and hand model execution | frame, crop boxes, config | body detections, hand points |
 | `pipeline/pipeline.py` | Single-frame body+hand processing | frame, runner, smoother | body points, `hands_by_side`, overlay rendering |
 | `network/osc_sender.py` | Live UDP transport | body points, hands, joints | JSON UDP packets |
-| `utils/bootstrap_dependencies.py` | Runtime environment setup | local filesystem, PATH, installed packages | prepared Python/runtime environment |
+| `utils/bootstrap_*.py` | Runtime environment setup | local filesystem, PATH, installed packages | prepared Python/runtime environment |
 | `utils/normalize.py` | Hand crop geometry | wrist/elbow/body frame bounds | hand crop box |
 | `utils/smoothing.py` | Temporal filtering and short hold | landmarks across frames | smoothed landmarks |
 | `utils/hand_fallback.py` | Hand plausibility and synthetic fallback | raw hand output, body wrist/elbow | accepted or generated hand |
 | `utils/hand_constraints.py` | Anatomical cleanup | hand landmarks | cleaned hand landmarks |
 | `utils/multi_person.py` | Single-camera multi-person tracking | detector results, frame | persistent person tracks |
 | `utils/fusion.py` | Multi-camera projection and fusion | per-view people/landmarks | fused body/hands/depth |
-| `utils/exports.py` | Joint building and export formats | body points, hands, fused depth | motion JSON, FBX, BVH-ready data |
+| `utils/exports.py` | Joint building and export formats | body points, hands, fused depth | motion JSON, FBX data |
 | `blender_kinematics/kinara_motion.py` | Blender-side JSON parsing/rest pose prep | Kinara JSON | `MotionClip` |
 | `blender_kinematics/import_kinara_motion.py` | Blender armature import and bake | `MotionClip` | armatures, actions, baked animation |
 
@@ -462,7 +466,7 @@ For each camera:
 For each camera:
 
 1. Run a full `MultiPersonTracker`.
-2. Group tracks across cameras with `_align_people_across_cameras()`.
+2. Group tracks across cameras with `align_people_across_cameras()`.
 3. For each grouped person:
    - collect body points per camera
    - collect hands per camera
@@ -474,7 +478,9 @@ For each camera:
 
 ### Calibration role
 
-`utils.fusion.load_camera_calibrations()` accepts lightweight calibration JSON. The current implementation is not full metric 3D reconstruction. It is a practical pseudo-depth system that uses view orientation and relative lateral displacement to estimate depth-like values good enough for export and retarget experimentation.
+`utils.fusion.load_camera_calibrations()` accepts lightweight calibration JSON. That path is a practical pseudo-depth system that uses view orientation and relative lateral displacement to estimate depth-like values good enough for export and retarget experimentation.
+
+For fused runs, Kinara can also load a calibrated camera TOML with `--triangulate-3d --calibration-3d`. In that mode, Kinara keeps its YOLO body and ONNX hand detections, stores matched per-camera 2D landmarks for the run, triangulates them after the frame loop, and replaces heuristic fused joint coordinates with calibrated 3D coordinates where reconstruction succeeds.
 
 ## Joint Construction And Export Normalization
 
@@ -609,7 +615,7 @@ If you need to change the project, these are the best entry points.
 ### Add or replace a body model
 
 - start in `utils/model_assets.py`
-- update `prepare_model_assets()` in `main.py`
+- update `prepare_model_assets()` in `runtime_config.py`
 - keep `ONNXPoseHandRunner.detect_bodies()` returning the existing body-detection contract
 
 ### Change hand crop behavior
@@ -653,14 +659,18 @@ The result is easier to debug than a deeply abstracted system because each stage
 ## Recommended Reading Order In Source
 
 1. `main.py`
-2. `config.py`
-3. `pipeline/pipeline.py`
-4. `inference/rtmpose.py`
-5. `utils/smoothing.py`
-6. `utils/hand_fallback.py`
-7. `utils/hand_constraints.py`
-8. `utils/multi_person.py`
-9. `utils/fusion.py`
-10. `utils/exports.py`
-11. `blender_kinematics/kinara_motion.py`
-12. `blender_kinematics/import_kinara_motion.py`
+2. `cli.py`
+3. `runtime_config.py`
+4. `runners/`
+5. `config.py`
+6. `pipeline/pipeline.py`
+7. `inference/rtmpose.py`
+8. `utils/smoothing.py`
+9. `utils/hand_fallback.py`
+10. `utils/hand_constraints.py`
+11. `utils/multi_person.py`
+12. `utils/fusion.py`
+13. `utils/exports.py`
+14. `utils/skeleton.py`
+15. `blender_kinematics/kinara_motion.py`
+16. `blender_kinematics/import_kinara_motion.py`

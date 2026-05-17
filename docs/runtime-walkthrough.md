@@ -144,7 +144,7 @@ This is the heart of the single-person runtime.
 
 ### Step A. Body detection
 
-`runner.detect_body(frame)` runs YOLO pose inference and returns one 17-point body.
+`runner.detect_body(frame)` runs YOLO pose inference and returns one 17-point body. When `--body-detect-interval` is greater than `1`, the model runs only on interval frames and skipped frames are predicted from recent landmark motion.
 
 If no reliable body is found, the code returns an all-zero 17-point structure. That may sound odd at first, but it keeps the pipeline structurally stable. Downstream consumers do not need to branch on `None` everywhere.
 
@@ -167,13 +167,14 @@ For each side:
 1. Read wrist and elbow from the body.
 2. Require both to exceed the body confidence threshold.
 3. Build a wrist-centered crop with `build_hand_box()`.
-4. Run the hand model on that crop.
-5. Reject implausible hand results with `is_hand_detection_valid()`.
-6. Smooth the hand landmarks over time.
-7. Anchor the hand wrist to the body wrist.
-8. Apply anatomical cleanup with `enforce_hand_constraints()`.
-9. Revalidate the corrected hand.
-10. If still unreliable, generate a synthetic default hand.
+4. Run the hand model on the primary crop plus up to `--hand-crop-retries` backup crops.
+5. On skipped `--hand-detect-interval` frames, translate the last hand from wrist motion instead of running hand inference.
+6. Reject implausible hand results with `is_hand_detection_valid()`.
+7. Smooth the hand landmarks over time.
+8. Anchor the hand wrist to the body wrist.
+9. Apply anatomical cleanup with `enforce_hand_constraints()`.
+10. Revalidate the corrected hand.
+11. If still unreliable, generate a synthetic default hand.
 
 ### Why the fallback hand exists
 
@@ -358,7 +359,7 @@ For every iteration:
 
 1. Each camera tracker updates independently.
 2. The runtime now has per-camera active track lists.
-3. `_align_people_across_cameras()` groups those tracks into fused people.
+3. `align_people_across_cameras()` groups those tracks into fused people.
 4. For each group:
    - collect body landmarks from all views where that person exists
    - collect hand landmarks from all views where that person exists
@@ -367,6 +368,8 @@ For every iteration:
    - build a joint map
 5. Render each grouped person on the reference canvas.
 6. Emit and export the fused multi-person result.
+
+Fused runs have an optional calibrated reconstruction step. With `--triangulate-3d --calibration-3d calibration.toml`, Kinara records each camera's 2D body and hand observations during the run, triangulates all frames after the loop, and exports real calibrated `x`, `y`, and `z` joint coordinates for joints that reconstruct cleanly. If the calibrated backend is missing or triangulation fails, the run keeps the older fused-depth estimate instead of throwing away the render.
 
 ### Grouping strategy
 
@@ -505,8 +508,11 @@ Look at:
 
 The simplest accurate mental model for Kinara is:
 
-- `main.py` orchestrates
-- `config.py` describes the run
+- `main.py` bootstraps and chooses the runtime mode
+- `cli.py` parses arguments and input assignments
+- `runtime_config.py` describes and validates the run
+- `runners` own the single, multi-person, and fused loops
+- `config.py` stores the run settings
 - `inference` detects
 - `pipeline` stabilizes and renders
 - `multi_person` persists identities

@@ -14,58 +14,45 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 
 ## `main.py`
 
-### Types
+- `main`: Thin entrypoint. It runs the dependency bootstrap, parses CLI args, resolves sources, and delegates to the single-input or fused runner.
+
+## `kinara`
+
+- `python -m kinara`: Package entrypoint that calls `main.main`.
+
+## `cli.py`
 
 - `InputAssignment`: Immutable mapping of a logical camera label such as `FRONT` or `LEFT` to either a webcam index or a file path.
-
-### CLI And Source Resolution
-
-- `parse_color`: Parses `B,G,R` CLI strings into OpenCV color tuples; used by `build_parser`.
+- `parse_color`: Parses `B,G,R` CLI strings into OpenCV color tuples.
 - `parse_identity_hint`: Parses `--identity person1=black,orange` into a normalized label and tuple of hint colors.
-- `prepare_model_assets`: Resolves and downloads body and hand models before inference starts.
 - `choose_video_gui`: Opens the Tk file picker used by interactive video selection.
-- `sanitize_label`: Normalizes labels for filenames and source resolution.
-- `resolve_output_basename`: Builds the base export stem for a single assignment or one labeled stream in a multi-input session.
-- `resolve_output_path`: Adjusts an explicit `--output` path for per-camera naming when multiple labeled sources are active.
-- `resolve_fused_output_basename`: Builds the fused output basename, usually from the `FRONT` source.
-- `resolve_fused_output_path`: Converts an explicit output path into a fused-output name.
 - `choose_camera_assignments_gui`: Interactive helper that asks for camera count and assigns files to logical view labels.
 - `resolve_sources`: Converts CLI or interactive input into a list of `InputAssignment` objects.
-- `build_parser`: Declares the full CLI surface, including model, tracking, rendering, output, and live UDP options.
+- `build_parser`: Declares the CLI surface.
 
-### Validation And Configuration
+## `runtime_config.py`
 
+- `prepare_model_assets`: Resolves and downloads body and hand models before inference starts.
 - `validate_config`: Performs runtime sanity checks on the resolved `PipelineConfig`.
-- `_prepare_runtime_config`: Calls `prepare_model_assets` and `validate_config`; used at the start of each runtime mode.
-- `_build_pipeline_config`: Converts parsed CLI arguments into a fully populated `PipelineConfig`.
+- `prepare_runtime_config`: Calls `prepare_model_assets` and `validate_config`; used at the start of each runtime mode.
 - `build_config_for_assignment`: Creates the config for a single labeled assignment.
 - `build_fused_config`: Creates the config for a fused multi-camera session.
 
-### Export Helpers
+## `runners`
 
-- `export_motion_bundle`: Normalizes single-person frames once and writes both JSON and FBX outputs.
-- `_build_fused_metadata`: Builds export metadata for fused modes, including camera labels and calibration path.
-- `_print_saved_paths`: Prints output paths after a run completes.
+- `runners.single.run_assignment`: Single-camera single-person control loop.
+- `runners.multi_person.run_multi_person_assignment`: Single-camera multi-person control loop.
+- `runners.fused.run_fused_assignments`: Multi-camera control loop for both single-person and multi-person fusion, including optional calibrated triangulation for fused exports.
+- `runners.fused_alignment`: Groups per-camera `PersonTrack` objects into fused people by label first and color similarity second.
+- `runners.common`: Shared export, payload, overlay, bounding-box, and hand-fusion helpers used by multiple runners.
 
-### Multi-Camera Identity Alignment
+## `utils/bootstrap_*`
 
-- `_track_sort_key`: Sort key that prioritizes labeled tracks and then left-to-right ordering.
-- `_person_key`: Chooses a stable person key from a track label, tracker id, or fallback index.
-- `_align_people_across_cameras`: Groups per-camera `PersonTrack` objects into fused people by label first and color similarity second.
-
-### Payload And Rendering Helpers
-
-- `_build_person_payload`: Creates the exported and OSC-ready person payload, including `body_points`, `hands_by_side`, and `joints`.
-- `_draw_person_overlay`: Draws person bounding boxes and labels on rendered frames.
-- `_box_from_body_points`: Rebuilds a bounding box from confident body points when a fused person no longer has a detector box.
-- `_fuse_smoothed_hands`: Fuses hand views and runs them through the renderer's smoother for temporal consistency.
-
-### Runtime Modes
-
-- `run_multi_person_assignment`: Single-camera multi-person control loop; uses `MultiPersonTracker`, renders per-track overlays, sends live UDP, and writes multi-person JSON and FBX bundle outputs.
-- `run_assignment`: Single-camera single-person control loop; uses `PoseHandPipeline`, builds a per-frame `JointMap`, sends live UDP, and writes rendered/JSON/FBX outputs.
-- `run_fused_assignments`: Multi-camera control loop; reads synchronized sources, performs either single-person or multi-person fusion, estimates pseudo-depth, renders the fused canvas, and exports fused outputs.
-- `main`: Top-level entrypoint; parses CLI args, resolves sources, selects the correct runtime mode, and starts the session.
+- `bootstrap_dependencies`: Orchestrates startup checks and exposes the bootstrap CLI.
+- `bootstrap_state`: Shared constants, module mappings, progress display, and runtime status dataclasses.
+- `bootstrap_paths`: Local vendor path setup, PATH/PYTHONPATH updates, DLL directory registration, and required-file checks.
+- `bootstrap_cuda`: NVIDIA driver, CUDA, and cuDNN discovery plus process environment repair.
+- `bootstrap_packages`: Python module probing, install-plan selection, package installation, and runtime warnings.
 
 ## `config.py`
 
@@ -132,8 +119,8 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 
 - `PoseHandPipeline.__init__`: Stores shared references to config, runner, smoother, and OSC sender.
 - `PoseHandPipeline.process_frame`: Convenience wrapper that detects and renders pose for one frame and returns the mutated frame.
-- `PoseHandPipeline.detect_pose`: Runs body detection, smooths body points, and then calls `detect_hands`.
-- `PoseHandPipeline.detect_hands`: Builds wrist-centered crops, runs hand inference, validates results, smooths hands, anchors them to wrists, enforces constraints, and falls back to generated default hands when needed.
+- `PoseHandPipeline.detect_pose`: Runs body detection or predicts skipped frames from recent motion, smooths body points, and then calls `detect_hands`.
+- `PoseHandPipeline.detect_hands`: Builds wrist-centered crops, runs or predicts hand inference according to cadence settings, validates results, smooths hands, anchors them to wrists, enforces constraints, and falls back to generated default hands when needed.
 - `PoseHandPipeline.render_pose`: Draws body and hands on the frame and optionally sends live UDP.
 - `PoseHandPipeline._draw_body`: Draws body skeleton edges and confident body keypoints.
 - `PoseHandPipeline._draw_hands`: Draws hand boxes, hand skeleton edges, and confident hand keypoints.
@@ -150,65 +137,26 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 
 ## `utils/bootstrap_dependencies.py`
 
-### Types
-
-- `ModuleStatus`: Import-check result for one required Python module.
-- `RuntimeReport`: Captures detected CUDA/cuDNN paths, include directories, path updates, and warnings.
-- `TerminalProgress`: Small progress-bar helper used by the bootstrap CLI and startup path.
-
-### `TerminalProgress` Methods
-
-- `TerminalProgress.__init__`: Stores the number of steps and bar width.
-- `TerminalProgress._render`: Draws the current progress line.
-- `TerminalProgress.note`: Writes a non-advancing status note.
-- `TerminalProgress.advance`: Advances the progress counter and redraws the progress line.
-- `TerminalProgress.break_line`: Ends the current progress line cleanly.
-- `TerminalProgress.finish`: Marks the bootstrap as complete and ends the progress display.
-
-### Environment And Path Helpers
-
-- `_dedupe_paths`: Removes duplicate filesystem paths while preserving order.
-- `_prepend_sys_path`: Adds a path to `sys.path` and registers it with `site`.
-- `_prepend_env_path`: Adds a path to the process `PATH` if it is not already present.
-- `_register_windows_dll_directory`: Registers a directory with `os.add_dll_directory` so Windows DLL loading can find CUDA and cuDNN.
-- `_prepend_pythonpath`: Adds a path to the process `PYTHONPATH`.
-- `_broadcast_environment_change`: Broadcasts a Windows environment-change message after persistent updates.
-- `_persist_user_path`: Writes CUDA/cuDNN path additions into the current user's environment on Windows.
-
-### Dependency Inspection Helpers
-
-- `_distribution_installed`: Checks whether a Python distribution is installed.
-- `_module_status`: Attempts to import one module and records success or failure.
-- `_module_group_status`: Runs `_module_status` across a tuple of module names.
-- `_find_missing_project_files`: Verifies that critical project files exist before runtime starts.
-- `_find_nvidia_smi`: Locates `nvidia-smi` via `PATH` or the standard Windows install location.
-- `_path_has_glob`: Checks whether a directory contains files matching a glob pattern.
-- `_collect_runtime_roots`: Builds the search list for CUDA and cuDNN discovery from environment variables and standard install locations.
-- `_collect_torch_runtime_roots`: Adds `torch/lib` locations because some GPU-capable installs carry runtime DLLs there.
-- `_bin_candidates`: Expands a runtime root into likely DLL directories.
-- `_include_candidates`: Expands a runtime root into likely include directories.
-- `_inspect_runtime`: Scans for NVIDIA driver presence, CUDA DLLs, cuDNN DLLs, and matching headers, then returns a `RuntimeReport`.
-- `_repair_runtime_paths`: Applies discovered DLL directories to `PATH`, `CUDA_PATH`, `CUDNN_PATH`, and Windows DLL registration.
-
-### Installation And Verification Helpers
-
-- `_ensure_local_environment`: Creates local runtime directories and seeds `PYTHONPATH`, `sys.path`, and `YOLO_CONFIG_DIR`.
-- `_choose_onnxruntime_distribution`: Chooses `onnxruntime-gpu` or `onnxruntime` based on what is installed and whether CUDA/cuDNN appear usable.
-- `_resolve_install_plan`: Turns missing imports into an install plan for the local vendor directory.
-- `_ensure_pip`: Ensures `pip` exists in the current Python environment.
-- `_install_packages`: Installs missing dependencies into the repo-local vendor directory.
-- `_probe_runtime`: Imports required modules, inspects ONNX providers, and returns module statuses plus warnings.
-- `_dedupe_warning_messages`: Removes duplicate warning strings before printing them.
-
-### Public Bootstrap API
-
 - `ensure_runtime_ready`: Main bootstrap entrypoint; prepares directories, inspects GPU runtime state, installs missing packages, re-verifies imports, and prints warnings.
 - `_build_cli_parser`: Builds the CLI parser for standalone bootstrap usage.
 - `main`: Standalone bootstrap CLI entrypoint for `utils/bootstrap_dependencies.py`.
 
+The implementation is split across:
+
+- `bootstrap_state.py`: `ModuleStatus`, `RuntimeReport`, `TerminalProgress`, and shared constants.
+- `bootstrap_paths.py`: repo-local vendor setup, `PATH`/`PYTHONPATH` mutation, DLL directory registration, and required-file checks.
+- `bootstrap_cuda.py`: NVIDIA driver, CUDA, and cuDNN discovery plus runtime path repair.
+- `bootstrap_packages.py`: import probing, package install planning, pip install execution, and warning deduplication.
+
 ## `utils/normalize.py`
 
 - `build_hand_box`: Builds a wrist-centered square crop using the wrist-to-elbow direction, a configurable scale, a minimum size, and a forward shift.
+
+## `utils/triangulation.py`
+
+- `triangulate_observation_frames`: Converts stored per-camera body and hand observations into calibration-backend input arrays, triangulates real 3D joints, and computes mean reprojection error when supported.
+- `apply_triangulated_overrides`: Replaces heuristic fused joint coordinates with calibrated 3D coordinates for joints that triangulated successfully.
+- `triangulation_metadata`: Builds compact export metadata describing camera labels, joint count, point count, and reprojection error.
 
 ## `utils/smoothing.py`
 
@@ -385,11 +333,8 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 - `_coerce_frame_index`: Converts frame indices into integers.
 - `export_multi_person_fbx_bundle`: Splits multi-person frames into one per-person FBX export file.
 
-### BVH And FBX Export
+### FBX Export
 
-- `_compute_offsets`: Builds the initial local joint offsets used by BVH hierarchy generation.
-- `_build_bvh_hierarchy_lines`: Recursively serializes the Kinara skeleton hierarchy into BVH text.
-- `export_motion_bvh`: Writes BVH motion output using localized joint translations.
 - `_fbx_template_header`: Returns the shared FBX header scaffold.
 - `export_motion_fbx`: Writes a lightweight FBX that stores animation as per-joint local translation curves.
 

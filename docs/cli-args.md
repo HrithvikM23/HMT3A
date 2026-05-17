@@ -2,10 +2,15 @@
 
 ## General
 
+`--calibrate-cameras`  
+Function: Creates a calibrated camera TOML from synchronized Charuco calibration videos.  
+Accepted values: flag only.  
+Notes: Use with at least two `--source` video files and `--calibration-output`.
+
 `--source`  
 Function: Selects the input source.  
-Accepted values: webcam index like `0`, `1`, `2`, a path to a video file, or repeated labeled values like `FRONT=front.mp4` and `LEFT=left.mp4`.  
-Usage: repeat the argument for multi-camera runs.
+Accepted values: webcam index like `0`, `1`, `2`, a path to a video file, or repeated labeled values like `CAM_0=cam0.mp4` and `CAM_1=cam1.mp4`.  
+Usage: repeat the argument for multi-camera runs. Unlabeled sources are auto-labeled as `CAM_0`, `CAM_1`, and so on.
 
 `--output`  
 Function: Sets the output video name template.  
@@ -19,6 +24,32 @@ Accepted values: any writable directory path.
 `--output-basename`  
 Function: Sets the shared filename prefix for rendered, fbx, and json outputs.  
 Accepted values: any non-empty text string.
+
+`--calibration-output`  
+Function: Sets the output TOML path for `--calibrate-cameras`.  
+Accepted values: writable `.toml` path or output directory.
+
+`--charuco-squares-x`  
+Function: Sets the Charuco board square count along X for calibration.  
+Accepted range: integer `> 0`.  
+Default: `7`
+
+`--charuco-squares-y`  
+Function: Sets the Charuco board square count along Y for calibration.  
+Accepted range: integer `> 0`.  
+Default: `5`
+
+`--charuco-square-size`  
+Function: Sets the real square size for calibration in your chosen units.  
+Accepted range: float `> 0`.  
+Default: `1.0`
+
+`--charuco-marker-scale`  
+Function: Sets marker length as a fraction of square size.  
+Accepted range: float `> 0`.  
+Default: `0.8`
+
+Recommended board: 7 x 5 Charuco squares, 35 mm square size, 28 mm marker size. If your printed square edge measures differently, use the measured value for `--charuco-square-size`.
 
 ## Model Selection
 
@@ -41,11 +72,6 @@ Function: Uses a specific ONNX hand model file instead of the preset downloader.
 Accepted values: path to an ONNX file.
 
 ## Model Runtime Settings
-
-`--body-input-name`  
-Function: Reserved body input setting kept in config for compatibility.  
-Accepted values: any text string.  
-Default: `input`
 
 `--hand-input-name`  
 Function: Sets the ONNX input tensor name for the hand model.  
@@ -116,11 +142,6 @@ Function: Provides optional clothing color hints to keep person IDs stable when 
 Accepted values: labels like `person1`, `person2` with one or more color names such as `black`, `orange`, `blue`, `gray`, `silver`, `red`, `green`, `yellow`, `purple`, `pink`, `brown`, `white`.  
 Usage: repeat for multiple people.
 
-`--person-detector-scale`  
-Function: Deprecated compatibility setting kept in config. It is currently unused by the YOLO multi-person path.  
-Accepted range: float `> 1.0`.  
-Default: `1.05`
-
 `--person-box-scale`  
 Function: Expands each detected person box before running hand inference so limbs near the box edges are less likely to be cut off.  
 Accepted range: float `> 0`.  
@@ -146,6 +167,52 @@ Function: Loads an optional JSON file with per-camera fusion calibration overrid
 Accepted values: path to a JSON object keyed by camera label such as `FRONT`, `LEFT`, `RIGHT`, `BACK`.  
 Notes: Supported numeric fields are currently `depth_sign` and `depth_scale`.
 
+`--calibration-3d`  
+Function: Loads a calibrated camera TOML for real multi-view 3D triangulation.  
+Accepted values: path to a calibration `.toml` whose camera names match source labels like `CAM_0` and `CAM_1`.  
+Notes: Used only with `--triangulate-3d`.
+
+`--triangulate-3d`  
+Function: Enables real calibrated triangulation for fused runs.  
+Accepted values: flag only.  
+Default: disabled  
+Notes: Requires at least two synchronized camera sources and `--calibration-3d`.
+
+`--triangulation-min-cameras`  
+Function: Minimum number of camera views required to reconstruct one joint.  
+Accepted range: integer `>= 2`.  
+Default: `2`
+
+`--triangulation-use-outlier-rejection`  
+Function: Uses camera-view dropping when available to reduce bad-view influence.  
+Accepted values: flag only.  
+Default: disabled
+
+`--triangulation-max-cameras-to-drop`  
+Function: Maximum camera views that outlier rejection can drop for one point.  
+Accepted range: integer `>= 0`.  
+Default: `1`
+
+`--triangulation-reprojection-error`  
+Function: Target reprojection error for outlier-rejection triangulation.  
+Accepted range: float `> 0`.  
+Default: `0.01`
+
+`--triangulation-max-error`  
+Function: Drops triangulated joints above this reprojection error.  
+Accepted range: float `> 0`.  
+Default: disabled
+
+`--triangulation-smoothing-alpha`  
+Function: EMA smoothing factor applied after 3D triangulation. Higher values follow raw 3D more closely.  
+Accepted range: float in `(0, 1]`.  
+Default: `0.65`
+
+`--sync-offset`  
+Function: Applies manual per-camera frame offsets before fused processing.  
+Accepted values: `LABEL=FRAMES`, for example `CAM_1=3` or `CAM_0=-2`.  
+Notes: Positive values skip that camera's leading frames. Negative values shift other cameras forward relative to it.
+
 `--fused-depth-scale`  
 Function: Scales the estimated multi-camera depth used in fused 3D joint exports.  
 Accepted range: float `> 0`.  
@@ -160,6 +227,32 @@ Default: `botsort.yaml`
 Function: Overrides the Ultralytics device selection.  
 Accepted values: values like `0`, `cpu`, `cuda:0`.  
 Default: automatic
+
+## Performance Controls
+
+`--body-detect-interval`  
+Function: Runs body/person detection every N frames and predicts skipped frames from recent motion.  
+Accepted range: integer `> 0`.  
+Default: `1`  
+Notes: `1` keeps old behavior. `2` can nearly halve body model calls, with slightly more prediction during fast motion.
+
+`--hand-detect-interval`  
+Function: Runs hand inference every N frames and translates the last hand landmarks on skipped frames.  
+Accepted range: integer `> 0`.  
+Default: `1`  
+Notes: Hands are usually the expensive part because each visible person can require left and right crops.
+
+`--hand-crop-retries`  
+Function: Sets how many extra hand crop attempts run after the primary crop.  
+Accepted range: integer `>= 0`.  
+Default: `3`  
+Notes: Lower values are faster. Higher values are more robust when the first crop misses fingers.
+
+`--fps-log-interval`  
+Function: Prints render throughput every N seconds.  
+Accepted range: float `>= 0`.  
+Default: `0`  
+Notes: `0` disables logging.
 
 ## Live UDP Output
 
