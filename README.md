@@ -35,7 +35,7 @@ This branch is currently optimized for practical local runtime use:
 | --- | --- | --- |
 | Unreal Engine | 5.4 | Target animation runtime |
 | Python | 3.11.9 | Pipeline scripting |
-| CUDA Toolkit | 12.x+ | Optional acceleration for NVIDIA systems |
+| CUDA Toolkit | 12.x | Optional acceleration for NVIDIA systems |
 | cuDNN | 9.x | Used indirectly by PyTorch-backed GPU inference |
 
 ---
