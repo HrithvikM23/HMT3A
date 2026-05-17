@@ -1,12 +1,16 @@
 # Human Motion Tracking Pipeline (Kinara)
 
-Kinara is a local video and webcam motion-tracking pipeline built around a YOLO body pose model and an ONNX hand pose model. It supports single-person tracking, single-camera multi-person tracking, optional multi-camera fusion, live UDP output for Unreal-side receivers, and stack-safe recorded outputs.
+![Python](https://img.shields.io/badge/python-3.11-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Status](https://img.shields.io/badge/status-active-brightgreen)
+
+Kinara is a local video and webcam motion-tracking pipeline built around a YOLO-based body pose tracking and ONNX hand pose inference. It supports single-person tracking, single-camera multi-person tracking, optional multi-camera fusion, live UDP output for Unreal-side receivers, and stack-safe output generation.
 
 Project documentation:
 
-- [Architecture And Data Flow](./docs/ARCHITECTURE_AND_DATA_FLOW.md)
-- [Detailed Runtime Walkthrough](./docs/DETAILED_RUNTIME_WALKTHROUGH.md)
-- [Function Reference](./docs/FUNCTION_REFERENCE.md)
+- [Architecture And Data Flow](./docs/architecture.md)
+- [Detailed Runtime Walkthrough](./docs/runtime-walkthrough.md)
+- [Function Reference](./docs/function-reference.md)
 
 This branch is currently optimized for practical local runtime use:
 - YOLO body tracking for both single-person and multi-person flows
@@ -31,7 +35,7 @@ This branch is currently optimized for practical local runtime use:
 | --- | --- | --- |
 | Unreal Engine | 5.4 | Target animation runtime |
 | Python | 3.11.9 | Pipeline scripting |
-| CUDA Toolkit | 12.9+ | Optional acceleration for NVIDIA systems |
+| CUDA Toolkit | 12.x+ | Optional acceleration for NVIDIA systems |
 | cuDNN | 9.x | Used indirectly by PyTorch-backed GPU inference |
 
 ---
@@ -277,7 +281,7 @@ Current packet content includes:
 
 Live UDP is disabled unless you pass `--osc-enabled`.
 
-The default live UDP target values are centralized in [config.py](https://github.com/HrithvikM23/Kinara/blob/main/config.py):
+The default live UDP target values are centralized in [config.py](./config.py):
 
 ```txt
 HOST = 127.0.0.1
@@ -285,7 +289,7 @@ PORT = 9000
 ENABLED = false
 ```
 
-See [args.md](https://github.com/HrithvikM23/Kinara/blob/main/args.md) for host/port flags.
+See [cli-args.md](./docs/cli-args.md) for host/port flags.
 
 ---
 
@@ -312,6 +316,12 @@ The next run becomes `-2`, then `-3`, and so on.
 ```bash
 cd [drive]:\[path]\Kinara
 py main.py
+```
+
+You can also use the package entrypoint:
+
+```bash
+python -m kinara
 ```
 
 Program flow:
@@ -343,6 +353,12 @@ Single-person with CPU hand fallback:
 py main.py --source ".\video.mp4" --model yolo11x-pose.pt --provider CPUExecutionProvider
 ```
 
+Faster preview/render pass with prediction between model frames:
+
+```bash
+py main.py --source ".\video.mp4" --model yolo11n-pose.pt --yolo-device cuda:0 --body-detect-interval 2 --hand-detect-interval 2 --hand-crop-retries 1 --fps-log-interval 1
+```
+
 Two-person tracking:
 
 ```bash
@@ -358,10 +374,43 @@ py main.py --source ".\two_people.mp4" --model yolo11x-pose.pt --max-people 2 --
 Multi-camera fused tracking from the CLI:
 
 ```bash
-py main.py --source FRONT=".\front.mp4" --source LEFT=".\left.mp4" --max-people 2 --camera-calibration ".\calibration.json"
+py main.py --source ".\cam0.mp4" --source ".\cam1.mp4" --max-people 2
 ```
 
-All CLI arguments are documented in [args.md](https://github.com/HrithvikM23/Kinara/blob/main/args.md).
+Create a calibrated camera TOML from Charuco calibration videos:
+
+```bash
+py main.py --calibrate-cameras --source ".\calib_cam0.mp4" --source ".\calib_cam1.mp4" --calibration-output ".\calibration.toml" --charuco-square-size 35
+```
+
+### Calibration Board
+
+Use a Charuco board for camera calibration. The recommended starter board is:
+
+```txt
+Squares: 7 x 5
+Square size: 35 mm
+Marker size: 28 mm
+Marker scale: 0.8
+```
+
+Print it as large and flat as practical. A4 can work for close webcams, but A3 is better because the board remains readable from more positions in the capture space. The most important value is the true measured edge length of one square. If the printed square edge is 30 mm, pass `--charuco-square-size 30`; if it is 35 mm, pass `--charuco-square-size 35`.
+
+Good calibration video habits:
+
+- keep the board flat and rigid
+- show it clearly to every camera
+- move it through near, far, high, low, left, right, and tilted angles
+- avoid motion blur and glare
+- record enough frames where the board is visible in multiple cameras at once
+
+Fused tracking with real calibrated 3D triangulation:
+
+```bash
+py main.py --source ".\cam0.mp4" --source ".\cam1.mp4" --triangulate-3d --calibration-3d ".\calibration.toml" --sync-offset CAM_1=3
+```
+
+All CLI arguments are documented in [cli-args.md](./docs/cli-args.md).
 
 ---
 
@@ -398,7 +447,7 @@ All CLI arguments are documented in [args.md](https://github.com/HrithvikM23/Kin
 | Head and face tracking for head aim and facial landmarks | Planned  |
 | Retarget presets for Unreal, MetaHuman, Mixamo, and Rigify | Planned  |
 | Foot contact and ground lock to reduce foot sliding | Planned  |
-| Multi-person FBX export             | Complete |
+| Multi-person FBX export             | Working |
 | Calibration-aware 3D fusion         | Working  |
 | Multi-camera + multi-person         | Complete |
 
@@ -445,4 +494,4 @@ Add an Android client flow where up to four phones can stream camera video over 
 
 # License
 
-See [LICENSE.md](https://github.com/HrithvikM23/Kinara/blob/main/LICENSE.md).
+See [LICENSE](./LICENSE.md).
