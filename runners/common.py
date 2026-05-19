@@ -8,6 +8,7 @@ from config import PipelineConfig
 from pipeline.pipeline import PoseHandPipeline
 from utils.exports import build_joint_map, export_motion_fbx, export_motion_json, _normalize_export_frames
 from utils.fusion import fuse_hand_views
+from utils.motion_cleanup import cleanup_motion_frames
 from utils.payloads import HandPayload, PersonPayload
 from utils.skeleton import Point
 
@@ -20,6 +21,7 @@ def export_motion_bundle(
 ) -> None:
     if not frames:
         return
+    frames = cleanup_motion_frames(frames, config)
     normalized_frames = _normalize_export_frames(frames)
     export_motion_json(config.json_output_path, fps, normalized_frames, metadata, frames_are_normalized=True)
     export_motion_fbx(config.fbx_output_path, fps, normalized_frames, frames_are_normalized=True)

@@ -10,6 +10,7 @@ from runtime_config import prepare_runtime_config
 from runners.common import build_person_payload, draw_person_overlay, print_saved_paths
 from utils.exports import export_multi_person_fbx_bundle, export_multi_person_json
 from utils.fps import FpsMeter
+from utils.motion_cleanup import cleanup_multi_person_frames
 from utils.multi_person import MultiPersonTracker
 
 
@@ -59,6 +60,9 @@ def run_multi_person_assignment(config: PipelineConfig) -> None:
                 metadata={
                     "frame_index": frame_index,
                     "mode": "multi_person",
+                    "profile": config.profile,
+                    "body_backend": config.body_backend,
+                    "hand_backend": config.hand_backend,
                     "source": str(config.video_path),
                 },
             )
@@ -76,16 +80,20 @@ def run_multi_person_assignment(config: PipelineConfig) -> None:
         osc_sender.close()
         cv2.destroyAllWindows()
 
+    cleaned_motion_frames = cleanup_multi_person_frames(motion_frames, config)
     export_multi_person_json(
         config.json_output_path,
         fps=session.fps,
-        frames=motion_frames,
+        frames=cleaned_motion_frames,
         metadata={
             "mode": "multi_person",
+            "profile": config.profile,
+            "body_backend": config.body_backend,
+            "hand_backend": config.hand_backend,
             "source": str(config.video_path),
             "max_people": config.max_people,
             "identity_hints": {key: list(value) for key, value in config.identity_hints.items()},
         },
     )
-    exported_fbx_paths = export_multi_person_fbx_bundle(config.fbx_output_path, session.fps, motion_frames)
+    exported_fbx_paths = export_multi_person_fbx_bundle(config.fbx_output_path, session.fps, cleaned_motion_frames)
     print_saved_paths(config.output_path, config.json_output_path, *exported_fbx_paths)

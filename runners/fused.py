@@ -24,6 +24,7 @@ from runners.fused_alignment import align_people_across_cameras
 from utils.exports import build_joint_map, export_multi_person_fbx_bundle, export_multi_person_json
 from utils.fps import FpsMeter
 from utils.fusion import estimate_joint_depths, fuse_body_views, load_camera_calibrations
+from utils.motion_cleanup import cleanup_multi_person_frames
 from utils.multi_person import MultiPersonTracker
 from utils.smoothing import LandmarkSmoother
 from utils.triangulation import (
@@ -41,6 +42,9 @@ def _build_fused_metadata(
 ) -> dict[str, object]:
     return {
         "mode": mode,
+        "profile": config.profile,
+        "body_backend": config.body_backend,
+        "hand_backend": config.hand_backend,
         "camera_labels": [assignment.label for assignment in assignments],
         "sources": {assignment.label: str(assignment.source) for assignment in assignments},
         "body_model_variant": config.body_model_variant,
@@ -171,13 +175,14 @@ def run_fused_assignments(
                 triangulation_frames,
                 metadata,
             )
+        cleaned_motion_frames = cleanup_multi_person_frames(motion_frames, config)
         export_multi_person_json(
             config.json_output_path,
             fps=export_fps,
-            frames=motion_frames,
+            frames=cleaned_motion_frames,
             metadata=metadata,
         )
-        exported_fbx_paths = export_multi_person_fbx_bundle(config.fbx_output_path, export_fps, motion_frames)
+        exported_fbx_paths = export_multi_person_fbx_bundle(config.fbx_output_path, export_fps, cleaned_motion_frames)
         print_saved_paths(config.output_path, config.json_output_path, *exported_fbx_paths)
         return
 
@@ -389,6 +394,9 @@ def _run_fused_multi_person_frame(
         metadata={
             "frame_index": frame_index,
             "mode": "fused_multi_person",
+            "profile": config.profile,
+            "body_backend": config.body_backend,
+            "hand_backend": config.hand_backend,
             "camera_labels": list(frames_by_label),
         },
     )
@@ -464,6 +472,9 @@ def _run_fused_single_frame(
         metadata={
             "frame_index": frame_index,
             "mode": "fused",
+            "profile": config.profile,
+            "body_backend": config.body_backend,
+            "hand_backend": config.hand_backend,
             "camera_labels": list(frames_by_label),
         },
     )

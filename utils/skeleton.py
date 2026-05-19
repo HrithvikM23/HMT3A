@@ -96,6 +96,13 @@ BODY_NAME_TO_INDEX = {
     "RightAnkle": 16,
 }
 
+BODY_FOOT_NAME_TO_INDEX = {
+    "LeftFoot": 17,
+    "RightFoot": 18,
+    "LeftToeBase": 19,
+    "RightToeBase": 20,
+}
+
 HAND_NAME_TO_INDEX = {
     "Thumb1": 1,
     "Thumb2": 2,

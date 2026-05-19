@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from cli import build_parser, resolve_sources
+import sys
+
+from cli import build_parser, explicit_option_dests, resolve_sources
+from runtime_profiles import apply_runtime_profile
 from utils.bootstrap_dependencies import ensure_runtime_ready
 
 
 def main() -> None:
     parser = build_parser()
+    explicit_dests = explicit_option_dests(parser, sys.argv[1:])
     args = parser.parse_args()
+    apply_runtime_profile(args, explicit_dests)
 
     ensure_runtime_ready()
 
@@ -41,6 +46,9 @@ def main() -> None:
             print(f"Error: camera calibration failed: {exc}")
             return
         print(f"Saved: {saved_path}")
+        report_path = saved_path.with_suffix(".quality.json")
+        if report_path.exists():
+            print(f"Saved: {report_path}")
         return
 
     if len(assignments) > 1:

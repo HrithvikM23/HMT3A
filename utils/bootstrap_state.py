@@ -12,8 +12,10 @@ ULTRALYTICS_CONFIG_DIR = PROJECT_ROOT / ".ultralytics"
 REQUIRED_PROJECT_FILES = (
     Path("main.py"),
     Path("pyproject.toml"),
+    Path("backend_selection.py"),
     Path("cli.py"),
     Path("config.py"),
+    Path("runtime_profiles.py"),
     Path("kinara") / "__main__.py",
     Path("runtime_config.py"),
     Path("camera") / "capture.py",
@@ -26,6 +28,7 @@ REQUIRED_PROJECT_FILES = (
     Path("runners") / "multi_person.py",
     Path("runners") / "single.py",
     Path("utils") / "color_profile.py",
+    Path("utils") / "body_constraints.py",
     Path("utils") / "body_geometry.py",
     Path("utils") / "bootstrap_cuda.py",
     Path("utils") / "bootstrap_dependencies.py",
@@ -38,6 +41,7 @@ REQUIRED_PROJECT_FILES = (
     Path("utils") / "hand_constraints.py",
     Path("utils") / "hand_fallback.py",
     Path("utils") / "model_assets.py",
+    Path("utils") / "motion_cleanup.py",
     Path("utils") / "multi_person.py",
     Path("utils") / "normalize.py",
     Path("utils") / "payloads.py",
@@ -53,6 +57,7 @@ MODULE_TO_PACKAGE = {
     "torchvision": "torchvision",
     "ultralytics": "ultralytics",
     "onnxruntime": "onnxruntime",
+    "mediapipe": "mediapipe==0.10.21",
 }
 
 

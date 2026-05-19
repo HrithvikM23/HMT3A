@@ -3,6 +3,7 @@ from __future__ import annotations
 import cv2
 
 from config import BODY_EDGES, BODY_KEYPOINTS, HAND_EDGES, WRIST_TO_ELBOW
+from utils.body_constraints import BodyKinematicConstraints
 from utils.body_geometry import derive_foot_points
 from utils.hand_constraints import enforce_hand_constraints
 from utils.hand_fallback import anchor_hand_to_wrist, generate_default_hand, has_usable_hand_detection, is_hand_detection_valid
@@ -22,6 +23,7 @@ class PoseHandPipeline:
         self._last_body_points = None
         self._last_hand_by_side = {}
         self._last_wrist_by_side = {}
+        self._body_constraints = BodyKinematicConstraints(config)
 
     def process_frame(self, frame):
         body_points, hands_by_side = self.detect_pose(frame)
@@ -39,6 +41,7 @@ class PoseHandPipeline:
             )
         if body_points is None:
             body_points = [(0, 0, 0.0) for _ in range(17)]
+        body_points = self._body_constraints.apply(body_points)
         self._previous_body_points = self._last_body_points
         self._last_body_points = body_points
         hands_by_side = self.detect_hands(frame, body_points)
@@ -72,6 +75,10 @@ class PoseHandPipeline:
             hand_box = box
             if run_hand_model:
                 raw_hand_points = self._detect_best_hand(frame, wrist_point, elbow_point, box)
+                if raw_hand_points is None and self.config.enable_backend_fallbacks:
+                    predicted_hand = self._predict_hand(side, wrist_point)
+                    if predicted_hand is not None:
+                        hand_box, raw_hand_points = predicted_hand
             else:
                 predicted_hand = self._predict_hand(side, wrist_point)
                 if predicted_hand is not None:
@@ -149,6 +156,9 @@ class PoseHandPipeline:
         return best_points
 
     def _hand_candidate_boxes(self, wrist_point, elbow_point, frame_width, frame_height, primary_box):
+        if self.config.hand_backend == "mediapipe" and not self.config.enable_backend_fallbacks:
+            return [primary_box]
+
         boxes = [primary_box]
         retry_specs = ((2.4, 0.15), (2.8, 0.35), (3.2, 0.05))
         for scale_multiplier, forward_shift in retry_specs[: self.config.hand_crop_retries]:
@@ -201,13 +211,16 @@ class PoseHandPipeline:
         self._draw_feet(frame, body_points)
 
     def _draw_feet(self, frame, body_points) -> None:
-        for knee_idx, ankle_idx in ((13, 15), (14, 16)):
+        for knee_idx, ankle_idx, foot_idx, toe_idx in ((13, 15, 17, 19), (14, 16, 18, 20)):
             knee_point = body_points[knee_idx]
             ankle_point = body_points[ankle_idx]
             if knee_point[2] <= self.config.body_conf_threshold or ankle_point[2] <= self.config.body_conf_threshold:
                 continue
 
-            foot_point, toe_point = derive_foot_points(knee_point, ankle_point)
+            if len(body_points) > toe_idx and body_points[foot_idx][2] > self.config.body_conf_threshold and body_points[toe_idx][2] > self.config.body_conf_threshold:
+                foot_point, toe_point = body_points[foot_idx], body_points[toe_idx]
+            else:
+                foot_point, toe_point = derive_foot_points(knee_point, ankle_point)
             ankle_xy = (ankle_point[0], ankle_point[1])
             foot_xy = (foot_point[0], foot_point[1])
             toe_xy = (toe_point[0], toe_point[1])

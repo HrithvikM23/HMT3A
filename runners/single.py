@@ -53,6 +53,9 @@ def run_assignment(config: PipelineConfig) -> None:
                 metadata={
                     "frame_index": frame_index,
                     "mode": "single",
+                    "profile": config.profile,
+                    "body_backend": config.body_backend,
+                    "hand_backend": config.hand_backend,
                     "source": str(config.video_path),
                 },
             )
@@ -76,6 +79,9 @@ def run_assignment(config: PipelineConfig) -> None:
         frames=motion_frames,
         metadata={
             "mode": "single",
+            "profile": config.profile,
+            "body_backend": config.body_backend,
+            "hand_backend": config.hand_backend,
             "source": str(config.video_path),
             "body_model_variant": config.body_model_variant,
             "hand_model_variant": config.hand_model_variant,

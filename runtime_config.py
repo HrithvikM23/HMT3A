@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from backend_selection import needs_onnx_hand, needs_yolo_body, resolve_backend_selection
 from cli import InputAssignment, sanitize_label
 from config import PipelineConfig
 from utils.model_assets import DEFAULT_BODY_MODEL, HAND_MODEL_SPECS, ensure_body_model_file, ensure_model_file
@@ -12,12 +13,15 @@ DEFAULT_PROVIDER_NAMES = ("CUDAExecutionProvider",)
 
 
 def prepare_model_assets(config: PipelineConfig) -> None:
-    hand_spec = HAND_MODEL_SPECS[config.hand_model_variant]
-
-    if config.body_model_path is None:
+    if needs_yolo_body(config.body_backend, config.enable_backend_fallbacks) and config.body_model_path is None:
         config.body_model_path = config.body_model_variant or DEFAULT_BODY_MODEL
-    config.body_model_path = ensure_body_model_file(config.project_root, str(config.body_model_path))
+    if needs_yolo_body(config.body_backend, config.enable_backend_fallbacks):
+        config.body_model_path = ensure_body_model_file(config.project_root, str(config.body_model_path))
 
+    if not needs_onnx_hand(config.hand_backend, config.enable_backend_fallbacks):
+        return
+
+    hand_spec = HAND_MODEL_SPECS[config.hand_model_variant]
     if config.hand_model_path is None:
         print(f"Preparing hand model preset '{config.hand_model_variant}'...")
         config.hand_model_path = ensure_model_file(config.project_root, hand_spec)
@@ -60,6 +64,15 @@ def resolve_fused_output_path(output_path: Path | None) -> Path | None:
 
 
 def validate_config(config: PipelineConfig) -> bool:
+    if config.body_backend not in {"yolo", "mediapipe"}:
+        print(f"Error: invalid body backend: {config.body_backend}")
+        return False
+    if config.hand_backend not in {"onnx", "mediapipe"}:
+        print(f"Error: invalid hand backend: {config.hand_backend}")
+        return False
+    if config.body_backend == "mediapipe" and config.max_people > 1:
+        print("Error: MediaPipe body backend currently supports one person. Use --body-backend yolo for multi-person.")
+        return False
     missing_paths = [
         path for path in (config.hand_model_path,)
         if path is not None and not Path(path).exists()
@@ -92,6 +105,9 @@ def validate_config(config: PipelineConfig) -> bool:
         "identity_min_score": config.identity_min_score,
         "person_cross_wrist_ratio": config.person_cross_wrist_ratio,
         "triangulation_smoothing_alpha": config.triangulation_smoothing_alpha,
+        "body_length_smoothing_alpha": config.body_length_smoothing_alpha,
+        "body_length_correction": config.body_length_correction,
+        "export_cleanup_smoothing_alpha": config.export_cleanup_smoothing_alpha,
     }
     for field_name, value in bounded_float_fields.items():
         if value <= 0 or value > 1:
@@ -154,16 +170,43 @@ def validate_config(config: PipelineConfig) -> bool:
     if config.fps_log_interval < 0:
         print(f"Error: fps_log_interval must be zero or greater: {config.fps_log_interval}")
         return False
+    if config.export_cleanup_max_velocity <= 0:
+        print(f"Error: export_cleanup_max_velocity must be positive: {config.export_cleanup_max_velocity}")
+        return False
+    if config.export_foot_lock_velocity <= 0:
+        print(f"Error: export_foot_lock_velocity must be positive: {config.export_foot_lock_velocity}")
+        return False
+    if config.export_foot_lock_max_lift < 0:
+        print(f"Error: export_foot_lock_max_lift must be zero or greater: {config.export_foot_lock_max_lift}")
+        return False
     return True
 
 
 def prepare_runtime_config(config: PipelineConfig) -> bool:
+    apply_auto_performance(config)
     try:
         prepare_model_assets(config)
     except Exception as exc:
         print(f"Error: failed to prepare model assets: {exc}")
         return False
     return validate_config(config)
+
+
+def apply_auto_performance(config: PipelineConfig) -> None:
+    if not config.auto_performance_enabled:
+        return
+    if config.body_backend != "yolo" and not config.enable_backend_fallbacks:
+        return
+    if config.yolo_device:
+        return
+    try:
+        import torch
+    except ModuleNotFoundError:
+        return
+    if torch.cuda.is_available():
+        config.yolo_device = "0"
+        if config.profile in {"fastest", "mid"}:
+            config.yolo_half = True
 
 
 def _build_pipeline_config(
@@ -175,11 +218,16 @@ def _build_pipeline_config(
     preview_window_title: str,
 ) -> PipelineConfig:
     calibration_3d_path = args.calibration_3d
+    body_backend, hand_backend, enable_backend_fallbacks = resolve_backend_selection(args)
     return PipelineConfig(
         video_path=video_path,
         output_path=output_path,
         output_directory=args.output_dir,
         output_basename=output_basename,
+        profile=args.profile,
+        body_backend=body_backend,
+        hand_backend=hand_backend,
+        enable_backend_fallbacks=enable_backend_fallbacks,
         body_model_path=args.model,
         hand_model_path=args.hand_model,
         body_model_variant=args.model or DEFAULT_BODY_MODEL,
@@ -233,11 +281,22 @@ def _build_pipeline_config(
         triangulation_smoothing_alpha=args.triangulation_smoothing_alpha,
         sync_offsets={label.upper(): offset for label, offset in (args.sync_offsets or [])},
         fused_depth_scale=args.fused_depth_scale,
+        auto_performance_enabled=not args.no_auto_performance,
         yolo_tracker=args.yolo_tracker,
         yolo_device=args.yolo_device,
+        yolo_half=args.yolo_half,
         body_detect_interval=args.body_detect_interval,
         hand_detect_interval=args.hand_detect_interval,
         hand_crop_retries=args.hand_crop_retries,
+        body_constraints_enabled=not args.no_body_constraints,
+        body_length_smoothing_alpha=args.body_length_smoothing_alpha,
+        body_length_correction=args.body_length_correction,
+        export_cleanup_enabled=not args.no_export_cleanup,
+        export_cleanup_smoothing_alpha=args.export_cleanup_smoothing_alpha,
+        export_cleanup_max_velocity=args.export_cleanup_max_velocity,
+        export_foot_lock_enabled=not args.no_foot_lock,
+        export_foot_lock_velocity=args.foot_lock_velocity,
+        export_foot_lock_max_lift=args.foot_lock_max_lift,
         fps_log_interval=args.fps_log_interval,
         identity_hints=dict(args.identity_hints or []),
     )

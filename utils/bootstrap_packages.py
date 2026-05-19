@@ -11,7 +11,7 @@ except ImportError:  # pragma: no cover
     import importlib_metadata  # type: ignore[no-redef]
 
 from utils.bootstrap_paths import dedupe_paths, prepend_pythonpath, prepend_sys_path
-from utils.bootstrap_state import ModuleStatus, RuntimeReport, VENDOR_DIR
+from utils.bootstrap_state import MODULE_TO_PACKAGE, ModuleStatus, RuntimeReport, VENDOR_DIR
 
 
 def distribution_installed(distribution_name: str) -> bool:
@@ -69,6 +69,10 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
     elif gpu_runtime_detected and not distribution_installed("onnxruntime-gpu"):
         packages_to_install.append("onnxruntime-gpu")
 
+    if "mediapipe" in missing_modules:
+        packages_to_install.append(MODULE_TO_PACKAGE["mediapipe"])
+        missing_modules.discard("mediapipe")
+
     return packages_to_install
 
 
@@ -118,7 +122,7 @@ def install_packages(packages: list[str]) -> None:
 
 
 def probe_runtime(report: RuntimeReport) -> tuple[list[ModuleStatus], list[str]]:
-    statuses = module_group_status(("cv2", "numpy", "torch", "torchvision", "ultralytics", "onnxruntime"))
+    statuses = module_group_status(tuple(MODULE_TO_PACKAGE))
     warnings = list(report.warnings)
 
     onnx_status = next((status for status in statuses if status.module_name == "onnxruntime"), None)

@@ -8,18 +8,21 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from cli import InputAssignment, build_parser, resolve_sources
+from cli import InputAssignment, build_parser, explicit_option_dests, resolve_sources
 from config import PipelineConfig
 from runners.fused_alignment import align_people_across_cameras
-from runtime_config import build_config_for_assignment
+from runtime_config import build_config_for_assignment, prepare_model_assets
+from runtime_profiles import apply_runtime_profile
 from utils.body_geometry import derive_foot_points
 from utils.fusion import DEFAULT_CAMERA_CALIBRATIONS, fuse_body_views, load_camera_calibrations
 from utils.normalize import build_hand_box
 from utils.color_profile import color_profile_similarity
 from utils.exports import build_joint_map, export_motion_json
 from utils.hand_fallback import anchor_hand_to_wrist, has_usable_hand_detection, is_hand_detection_valid
+from utils.motion_cleanup import cleanup_motion_frames
 from utils.prediction import predict_points, translate_points
 from utils.triangulation import apply_triangulated_overrides, triangulate_observation_frames
+from pipeline.pipeline import PoseHandPipeline
 
 
 def _body_points() -> list[tuple[int, int, float]]:
@@ -66,6 +69,90 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(config.hand_detect_interval, 3)
         self.assertEqual(config.hand_crop_retries, 1)
         self.assertEqual(config.fps_log_interval, 0.5)
+
+    def test_runtime_profile_applies_without_overriding_explicit_knobs(self) -> None:
+        parser = build_parser()
+        argv = [
+            "--source", "0",
+            "--profile", "fastest",
+            "--body-detect-interval", "1",
+        ]
+        explicit = explicit_option_dests(parser, argv)
+        args = parser.parse_args(argv)
+        apply_runtime_profile(args, explicit)
+        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+
+        self.assertEqual(config.profile, "fastest")
+        self.assertEqual(config.body_model_variant, "yolo11n-pose.pt")
+        self.assertEqual(config.hand_model_variant, "low")
+        self.assertEqual(config.body_input_size, 640)
+        self.assertTrue(config.yolo_half)
+        self.assertEqual(config.body_detect_interval, 1)
+        self.assertEqual(config.hand_detect_interval, 3)
+
+    def test_fastest_profile_enables_skip_frame_cheats(self) -> None:
+        parser = build_parser()
+        argv = ["--source", "0", "--profile", "fastest"]
+        args = parser.parse_args(argv)
+        apply_runtime_profile(args, explicit_option_dests(parser, argv))
+        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+
+        self.assertEqual(config.body_detect_interval, 2)
+        self.assertEqual(config.hand_detect_interval, 3)
+        self.assertEqual(config.hand_crop_retries, 0)
+        self.assertFalse(config.enable_backend_fallbacks)
+
+    def test_cli_landmark_backend_build_config(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["--source", "0", "--landmark-backend", "mediapipe"])
+        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+
+        self.assertEqual(config.body_backend, "mediapipe")
+        self.assertEqual(config.hand_backend, "mediapipe")
+
+    def test_cli_split_backends_build_config(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "--source", "0",
+            "--body-backend", "yolo",
+            "--hand-backend", "mediapipe",
+        ])
+        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+
+        self.assertEqual(config.body_backend, "yolo")
+        self.assertEqual(config.hand_backend, "mediapipe")
+        self.assertFalse(config.enable_backend_fallbacks)
+
+    def test_hybrid_shortcut_enables_backend_fallbacks(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["--source", "0", "--landmark-backend", "hybrid"])
+        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+
+        self.assertEqual(config.body_backend, "mediapipe")
+        self.assertEqual(config.hand_backend, "mediapipe")
+        self.assertTrue(config.enable_backend_fallbacks)
+
+    def test_prepare_model_assets_skips_unused_models(self) -> None:
+        config = PipelineConfig(body_backend="mediapipe", hand_backend="mediapipe")
+
+        prepare_model_assets(config)
+
+        self.assertIsNone(config.body_model_path)
+        self.assertIsNone(config.hand_model_path)
+
+    def test_mediapipe_hand_backend_uses_single_crop(self) -> None:
+        config = PipelineConfig(hand_backend="mediapipe", hand_crop_retries=3)
+        pipeline = PoseHandPipeline(config, SimpleNamespace(), SimpleNamespace(), SimpleNamespace())
+
+        boxes = pipeline._hand_candidate_boxes(
+            wrist_point=(50, 50, 0.9),
+            elbow_point=(50, 80, 0.9),
+            frame_width=100,
+            frame_height=100,
+            primary_box=(20, 20, 80, 80),
+        )
+
+        self.assertEqual(boxes, [(20, 20, 80, 80)])
 
     def test_unlabeled_multi_sources_get_camera_labels(self) -> None:
         parser = build_parser()
@@ -132,6 +219,35 @@ class CoreLogicTests(unittest.TestCase):
         self.assertGreater(foot_point[1], 320)
         self.assertGreater(toe_point[1], foot_point[1])
         self.assertEqual(foot_point[2], 0.7)
+
+    def test_build_joint_map_prefers_real_extra_foot_points(self) -> None:
+        points = _body_points()
+        points.extend([
+            (91, 333, 0.95),
+            (149, 333, 0.95),
+            (82, 330, 0.90),
+            (158, 330, 0.90),
+        ])
+
+        joints = build_joint_map(points, {})
+
+        self.assertEqual(joints["LeftFoot"]["x"], 91.0)
+        self.assertEqual(joints["LeftFoot"]["y"], -333.0)
+        self.assertEqual(joints["LeftToeBase"]["x"], 82.0)
+        self.assertEqual(joints["RightToeBase"]["x"], 158.0)
+
+    def test_export_cleanup_interpolates_missing_joint(self) -> None:
+        config = PipelineConfig()
+        frames = [
+            {"frame_index": 0, "joints": {"LeftWrist": {"x": 1.0, "y": 0.0, "z": 0.0, "confidence": 0.9}}},
+            {"frame_index": 1, "joints": {"LeftWrist": {"x": 0.0, "y": 0.0, "z": 0.0, "confidence": 0.0}}},
+            {"frame_index": 2, "joints": {"LeftWrist": {"x": 20.0, "y": 0.0, "z": 0.0, "confidence": 0.9}}},
+        ]
+
+        cleaned = cleanup_motion_frames(frames, config)
+
+        self.assertGreater(cleaned[1]["joints"]["LeftWrist"]["confidence"], 0.0)
+        self.assertGreater(cleaned[1]["joints"]["LeftWrist"]["x"], 0.0)
 
     def test_prediction_projects_points_with_confidence_decay(self) -> None:
         previous = [(8, 10, 0.9), (20, 30, 0.5)]

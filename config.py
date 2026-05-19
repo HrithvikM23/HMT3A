@@ -13,6 +13,10 @@ class PipelineConfig:
     project_root: Path = field(default_factory=lambda: Path(__file__).resolve().parent)
     body_model_path: str | Path | None = None
     hand_model_path: Path | None = None
+    profile: str = "quality"
+    body_backend: str = "yolo"
+    hand_backend: str = "onnx"
+    enable_backend_fallbacks: bool = False
     body_model_variant: str = "yolo11x-pose.pt"
     hand_model_variant: str = "max"
     video_path: int | Path = 0
@@ -52,11 +56,22 @@ class PipelineConfig:
     triangulation_smoothing_alpha: float = 0.65
     sync_offsets: dict[str, int] = field(default_factory=dict)
     fused_depth_scale: float = 1.0
+    auto_performance_enabled: bool = True
     yolo_tracker: str = "botsort.yaml"
     yolo_device: str | None = None
+    yolo_half: bool = False
     body_detect_interval: int = 1
     hand_detect_interval: int = 1
     hand_crop_retries: int = 3
+    body_constraints_enabled: bool = True
+    body_length_smoothing_alpha: float = 0.15
+    body_length_correction: float = 0.35
+    export_cleanup_enabled: bool = True
+    export_cleanup_smoothing_alpha: float = 0.55
+    export_cleanup_max_velocity: float = 220.0
+    export_foot_lock_enabled: bool = True
+    export_foot_lock_velocity: float = 8.0
+    export_foot_lock_max_lift: float = 16.0
     fps_log_interval: float = 0.0
     enable_preview: bool = True
     provider_names: tuple[str, ...] = ("CUDAExecutionProvider",)

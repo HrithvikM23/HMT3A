@@ -9,6 +9,7 @@ from typing import cast
 
 from utils.body_geometry import derive_foot_points
 from utils.skeleton import (
+    BODY_FOOT_NAME_TO_INDEX,
     BODY_NAME_TO_INDEX,
     DEFAULT_EXPORT_COORDINATE_SYSTEM,
     FACE_POINT_INDICES,
@@ -121,10 +122,25 @@ def _derive_head_joints(body_points: list[Point], joint_depths: dict[str, float]
 
 
 def _derive_foot_chain(
+    body_points: list[Point],
+    side_label: str,
     knee_point: Point,
     ankle_point: Point,
     foot_depth: float,
 ) -> tuple[JointValue, JointValue]:
+    foot_index = BODY_FOOT_NAME_TO_INDEX[f"{side_label}Foot"]
+    toe_index = BODY_FOOT_NAME_TO_INDEX[f"{side_label}ToeBase"]
+    if len(body_points) > toe_index:
+        foot_point = body_points[foot_index]
+        toe_point = body_points[toe_index]
+        if foot_point[2] > 0.0 and toe_point[2] > 0.0:
+            foot_world = _to_world_float(foot_point[0], foot_point[1], foot_depth)
+            toe_world = _to_world_float(toe_point[0], toe_point[1], foot_depth)
+            return (
+                _make_joint(foot_world[0], foot_world[1], foot_world[2], foot_point[2]),
+                _make_joint(toe_world[0], toe_world[1], toe_world[2], toe_point[2]),
+            )
+
     foot_point, toe_point = derive_foot_points(knee_point, ankle_point)
     foot_x, foot_y, derived_conf = foot_point
     toe_x, toe_y, _ = toe_point
@@ -160,11 +176,15 @@ def build_joint_map(
     joint_map["Chest"] = _make_joint(chest_x, chest_y, chest_z, chest_conf)
     joint_map["Neck"], joint_map["Head"] = _derive_head_joints(body_points, joint_depths)
     joint_map["LeftFoot"], joint_map["LeftToeBase"] = _derive_foot_chain(
+        body_points,
+        "Left",
         body_points[13],
         body_points[15],
         joint_depths.get("LeftAnkle", 0.0),
     )
     joint_map["RightFoot"], joint_map["RightToeBase"] = _derive_foot_chain(
+        body_points,
+        "Right",
         body_points[14],
         body_points[16],
         joint_depths.get("RightAnkle", 0.0),

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import config as app_config
+from backend_selection import BODY_BACKENDS, HAND_BACKENDS, LANDMARK_BACKENDS
+from runtime_profiles import PROFILE_NAMES, PROFILE_QUALITY
 
 
 CAMERA_POSITION_OPTIONS = {
@@ -173,8 +175,32 @@ def resolve_sources(args: argparse.Namespace) -> list[InputAssignment]:
     return []
 
 
+def explicit_option_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
+    option_to_dest = {
+        option_string: action.dest
+        for action in parser._actions
+        for option_string in action.option_strings
+        if action.dest != "help"
+    }
+    explicit: set[str] = set()
+    for token in argv:
+        if not token.startswith("--"):
+            continue
+        option = token.split("=", 1)[0]
+        dest = option_to_dest.get(option)
+        if dest is not None:
+            explicit.add(dest)
+    return explicit
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Pose and Hand Landmark Pipeline")
+    parser.add_argument(
+        "--profile",
+        choices=PROFILE_NAMES,
+        default=PROFILE_QUALITY,
+        help="Runtime profile for app modes: fastest for realtime, mid for balanced, quality for offline renders.",
+    )
     parser.add_argument(
         "--calibrate-cameras",
         action="store_true",
@@ -211,6 +237,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model",
         help="Body model filename or path, for example yolo11x-pose.pt or a local YOLO pose weights path.",
+    )
+    parser.add_argument(
+        "--landmark-backend",
+        choices=LANDMARK_BACKENDS,
+        default="yolo",
+        help="Compatibility shortcut. Prefer --body-backend and --hand-backend for new runs.",
+    )
+    parser.add_argument(
+        "--body-backend",
+        choices=BODY_BACKENDS,
+        help="Body landmark backend. yolo supports multi-person; mediapipe adds richer single-person feet.",
+    )
+    parser.add_argument(
+        "--hand-backend",
+        choices=HAND_BACKENDS,
+        help="Hand landmark backend. onnx uses the local hand model; mediapipe uses MediaPipe hand landmarks.",
+    )
+    parser.add_argument(
+        "--backend-fallbacks",
+        action="store_true",
+        help="Try the alternate backend when the selected body or hand backend misses a frame.",
     )
     parser.add_argument(
         "--hand-model-variant",
@@ -376,6 +423,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Depth scale multiplier used when estimating fused multi-camera joint depth.",
     )
     parser.add_argument(
+        "--no-auto-performance",
+        action="store_true",
+        help="Disable automatic GPU/FP16 and skip-frame performance choices.",
+    )
+    parser.add_argument(
         "--yolo-tracker",
         default="botsort.yaml",
         help="Ultralytics tracker config name for multi-person tracking.",
@@ -383,6 +435,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--yolo-device",
         help="Optional Ultralytics device override such as 0, cpu, or cuda:0.",
+    )
+    parser.add_argument(
+        "--yolo-half",
+        action="store_true",
+        help="Request FP16 body inference on supported CUDA GPUs.",
     )
     parser.add_argument(
         "--body-detect-interval",
@@ -461,5 +518,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--body-hold-frames", type=int, default=8, help="How many frames to keep the last valid body landmark.")
     parser.add_argument("--hand-hold-frames", type=int, default=6, help="How many frames to keep the last valid hand landmark.")
     parser.add_argument("--hold-confidence-decay", type=float, default=0.85, help="Confidence multiplier applied while reusing a held landmark.")
+    parser.add_argument("--no-body-constraints", action="store_true", help="Disable soft body length constraints.")
+    parser.add_argument("--body-length-smoothing-alpha", type=float, default=0.15, help="EMA factor used while learning body segment lengths.")
+    parser.add_argument("--body-length-correction", type=float, default=0.35, help="How strongly each frame is pulled toward learned body segment lengths.")
+    parser.add_argument("--no-export-cleanup", action="store_true", help="Disable offline export interpolation, spike cleanup, smoothing, and foot lock.")
+    parser.add_argument("--export-cleanup-smoothing-alpha", type=float, default=0.55, help="EMA factor used by offline export smoothing.")
+    parser.add_argument("--export-cleanup-max-velocity", type=float, default=220.0, help="Maximum per-frame joint movement before export cleanup treats a point as a spike.")
+    parser.add_argument("--no-foot-lock", action="store_true", help="Disable export-time foot planting stabilization.")
+    parser.add_argument("--foot-lock-velocity", type=float, default=8.0, help="Maximum per-frame foot movement considered planted during export cleanup.")
+    parser.add_argument("--foot-lock-max-lift", type=float, default=16.0, help="Maximum distance from the detected floor for export foot locking.")
     parser.add_argument("--no-preview", action="store_true", help="Disable the live OpenCV preview window.")
     return parser

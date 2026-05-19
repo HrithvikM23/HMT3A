@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from utils.skeleton import BODY_NAME_TO_INDEX, HAND_NAME_TO_INDEX, JointMap, Point
+from utils.skeleton import BODY_FOOT_NAME_TO_INDEX, BODY_NAME_TO_INDEX, HAND_NAME_TO_INDEX, JointMap, Point
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +20,7 @@ class TriangulationResult:
     triangulated_point_count: int
 
 
-BODY_TRIANGULATION_JOINTS = tuple(BODY_NAME_TO_INDEX)
+BODY_TRIANGULATION_JOINTS = tuple(BODY_NAME_TO_INDEX) + tuple(BODY_FOOT_NAME_TO_INDEX)
 HAND_TRIANGULATION_JOINTS = tuple(
     (f"Left{name}", "left", index)
     for name, index in HAND_NAME_TO_INDEX.items()
@@ -198,7 +198,10 @@ def _fill_body_points(
     threshold: float,
 ) -> None:
     for joint_offset, joint_name in enumerate(BODY_TRIANGULATION_JOINTS):
-        point = body_points[BODY_NAME_TO_INDEX[joint_name]]
+        point_index = BODY_NAME_TO_INDEX.get(joint_name, BODY_FOOT_NAME_TO_INDEX.get(joint_name))
+        if point_index is None or len(body_points) <= point_index:
+            continue
+        point = body_points[point_index]
         _fill_point(points_2d, confidences, camera_index, frame_index, joint_offset, point, threshold)
 
 
