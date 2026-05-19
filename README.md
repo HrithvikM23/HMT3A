@@ -347,6 +347,36 @@ Single-person:
 py main.py --source ".\video.mp4" --model yolo11x-pose.pt
 ```
 
+Realtime preview mode:
+
+```bash
+py main.py --source ".\video.mp4" --profile fastest --fps-log-interval 1
+```
+
+Balanced mode:
+
+```bash
+py main.py --source ".\video.mp4" --profile mid
+```
+
+MediaPipe body and hand mode:
+
+```bash
+py main.py --source ".\video.mp4" --body-backend mediapipe --hand-backend mediapipe
+```
+
+YOLO body with MediaPipe hands:
+
+```bash
+py main.py --source ".\video.mp4" --body-backend yolo --hand-backend mediapipe
+```
+
+Offline quality mode:
+
+```bash
+py main.py --source ".\video.mp4" --profile quality
+```
+
 Single-person with CPU hand fallback:
 
 ```bash
@@ -356,7 +386,7 @@ py main.py --source ".\video.mp4" --model yolo11x-pose.pt --provider CPUExecutio
 Faster preview/render pass with prediction between model frames:
 
 ```bash
-py main.py --source ".\video.mp4" --model yolo11n-pose.pt --yolo-device cuda:0 --body-detect-interval 2 --hand-detect-interval 2 --hand-crop-retries 1 --fps-log-interval 1
+py main.py --source ".\video.mp4" --profile fastest --yolo-device cuda:0 --fps-log-interval 1
 ```
 
 Two-person tracking:

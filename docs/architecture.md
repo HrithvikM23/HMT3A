@@ -37,17 +37,20 @@ At a high level, Kinara does five jobs:
 | --- | --- | --- | --- |
 | `main.py` | Bootstrap and mode selection | CLI args, input sources | delegated runtime session |
 | `cli.py` | CLI parsing and source selection | argv, interactive prompts | input assignments |
+| `runtime_profiles.py` | Fastest/mid/quality tuning presets | parsed CLI namespace | profile-applied runtime knobs |
 | `runtime_config.py` | Model prep and config validation | CLI namespace, source assignment | `PipelineConfig` |
 | `runners/` | Single, multi-person, and fused loops | `PipelineConfig`, frames | rendered video, live packets, exports |
 | `utils/bootstrap_*` | Startup dependency, CUDA, and environment checks | local Python environment | repaired process paths, install plan |
 | `config.py` | Central runtime config and drawing constants | CLI-derived values | `PipelineConfig` |
 | `camera/capture.py` | OpenCV capture and writer wrappers | webcam index or video path | frames, MP4 writer |
-| `inference/rtmpose.py` | Body and hand model execution | frame, crop boxes, config | body detections, hand points |
+| `inference/rtmpose.py` | Body and hand model execution | frame, crop boxes, config | body detections, optional real foot points, hand points |
 | `pipeline/pipeline.py` | Single-frame body+hand processing | frame, runner, smoother | body points, `hands_by_side`, overlay rendering |
 | `network/osc_sender.py` | Live UDP transport | body points, hands, joints | JSON UDP packets |
 | `utils/bootstrap_*.py` | Runtime environment setup | local filesystem, PATH, installed packages | prepared Python/runtime environment |
 | `utils/normalize.py` | Hand crop geometry | wrist/elbow/body frame bounds | hand crop box |
 | `utils/smoothing.py` | Temporal filtering and short hold | landmarks across frames | smoothed landmarks |
+| `utils/body_constraints.py` | Soft body length constraints | body landmarks, learned limb lengths | steadier body landmarks |
+| `utils/motion_cleanup.py` | Offline export cleanup and foot lock | exported joint frames | interpolated, smoothed, planted-foot motion |
 | `utils/hand_fallback.py` | Hand plausibility and synthetic fallback | raw hand output, body wrist/elbow | accepted or generated hand |
 | `utils/hand_constraints.py` | Anatomical cleanup | hand landmarks | cleaned hand landmarks |
 | `utils/multi_person.py` | Single-camera multi-person tracking | detector results, frame | persistent person tracks |
@@ -138,13 +141,13 @@ After sources are resolved, Kinara builds a `PipelineConfig`. This object is the
 
 Key groups of config fields:
 
-- model fields: model paths, hand model preset, ONNX input names, input sizes
+- model fields: body backend, hand backend, model paths, hand model preset, ONNX input names, input sizes
 - detection thresholds: body confidence, IOU, hand detection and keypoint thresholds
 - hand geometry fields: crop size, scale, forward shift, wrist offset tolerance
 - smoothing fields: alpha values, hold-frame counts, confidence decay
 - multi-person fields: maximum people, matching threshold, track hold frames, identity hints
 - fused mode fields: calibration path and depth scale
-- runtime/output fields: preview flag, provider names, output directory, output filenames, UDP host/port, FourCC
+- runtime/output fields: profile, preview flag, provider names, output directory, output filenames, UDP host/port, FourCC
 
 ### Mode switch
 
@@ -626,6 +629,7 @@ If you need to change the project, these are the best entry points.
 ### Change temporal behavior
 
 - start in `utils/smoothing.py`
+- inspect `utils/body_constraints.py` for limb-length stabilization
 - then inspect the thresholds in `PipelineConfig`
 
 ### Change person matching

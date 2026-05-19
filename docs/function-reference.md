@@ -38,6 +38,17 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 - `build_config_for_assignment`: Creates the config for a single labeled assignment.
 - `build_fused_config`: Creates the config for a fused multi-camera session.
 
+## `runtime_profiles.py`
+
+- `RUNTIME_PROFILES`: Defines the app-facing `fastest`, `mid`, and `quality` presets.
+- `apply_runtime_profile`: Applies profile defaults while preserving CLI values the user explicitly provided.
+
+## `inference/rtmpose.py`
+
+- `ONNXPoseHandRunner`: Runs only the configured body and hand backends. Body can be `yolo` or `mediapipe`; hands can be `onnx` or `mediapipe`; fallback loading is optional.
+- `detect_body`: Returns the existing 17-point body contract, with optional extra heel/toe points when a richer backend provides them.
+- `detect_hand`: Returns a 21-point hand from the configured hand path.
+
 ## `runners`
 
 - `runners.single.run_assignment`: Single-camera single-person control loop.
@@ -166,6 +177,16 @@ The implementation is split across:
 - `LandmarkSmoother.smooth_body`: Smooths body points using `_smooth_points` and stores body state.
 - `LandmarkSmoother.smooth_hand`: Smooths one hand side using `_smooth_points` and stores per-side state.
 - `LandmarkSmoother._smooth_points`: Shared smoothing routine that applies exponential averaging to confident points and short-term hold with confidence decay to temporarily missing points.
+
+## `utils/body_constraints.py`
+
+- `BodyKinematicConstraints`: Learns stable limb lengths over time, mirrors left/right segment targets, and softly pulls each frame toward those learned lengths.
+- `BODY_SEGMENT_GROUPS`: Defines upper-arm, forearm, thigh, and shin segment pairs used by the body constraint pass.
+
+## `utils/motion_cleanup.py`
+
+- `cleanup_motion_frames`: Runs export-time interpolation, spike cleanup, smoothing, and planted-foot locking for single-person joint frames.
+- `cleanup_multi_person_frames`: Applies the same export cleanup per person in multi-person exports.
 
 ## `utils/hand_fallback.py`
 

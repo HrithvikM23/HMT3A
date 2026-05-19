@@ -2,6 +2,12 @@
 
 ## General
 
+`--profile`  
+Function: Selects the app-facing runtime mode.  
+Accepted values: `fastest`, `mid`, `quality`.  
+Default: `quality`  
+Notes: `fastest` uses the light body model, FP16 body inference on CUDA when available, fewer hand crop attempts, and prediction between model frames. `mid` balances speed and stability. `quality` keeps the heaviest defaults for offline renders. Any explicit argument you pass with a profile overrides that profile value.
+
 `--calibrate-cameras`  
 Function: Creates a calibrated camera TOML from synchronized Charuco calibration videos.  
 Accepted values: flag only.  
@@ -59,6 +65,28 @@ Accepted values: a model filename like `yolo11x-pose.pt`, `yolo11l-pose.pt`, `yo
 Default: `yolo11x-pose.pt`  
 Notes: If you pass one of the known YOLO filenames and it is missing, it is downloaded into `models/body/`.
 
+`--landmark-backend`  
+Function: Compatibility shortcut for older commands. Prefer `--body-backend` and `--hand-backend` for new runs.  
+Accepted values: `yolo`, `mediapipe`, `hybrid`.  
+Default: `yolo`  
+Notes: `yolo` maps to `--body-backend yolo --hand-backend onnx`. `mediapipe` maps to `--body-backend mediapipe --hand-backend mediapipe`. `hybrid` maps to MediaPipe body/hands with backend fallbacks enabled.
+
+`--body-backend`  
+Function: Selects the body landmark backend.  
+Accepted values: `yolo`, `mediapipe`.  
+Default: `yolo`  
+Notes: `yolo` supports multi-person tracking. `mediapipe` can provide richer single-person foot landmarks.
+
+`--hand-backend`  
+Function: Selects the hand landmark backend.  
+Accepted values: `onnx`, `mediapipe`.  
+Default: `onnx`
+
+`--backend-fallbacks`  
+Function: Enables alternate backend fallback when the selected body or hand backend misses a frame.  
+Accepted values: flag only.  
+Default: disabled unless `--landmark-backend hybrid` is used.
+
 `--hand-model-variant`  
 Function: Selects the hand model preset and auto-download target.  
 Accepted variants: `low`, `mid`, `high`, `max`.  
@@ -82,6 +110,11 @@ Default: `images`
 Function: Sets the YOLO body model image size.  
 Accepted range: integer `> 0`.  
 Default: `960`
+
+`--yolo-half`  
+Function: Requests FP16 body inference on supported CUDA GPUs.  
+Accepted values: flag only.  
+Default: disabled in `quality`, enabled by `fastest` and `mid`.
 
 `--hand-input-size`  
 Function: Sets the square resize dimension for the hand crop input.  
@@ -376,6 +409,51 @@ Default: `6`
 Function: Confidence multiplier applied each frame while a held landmark is being reused. Lower values fade held joints out faster.  
 Accepted range: float in `(0, 1]`.  
 Default: `0.85`
+
+`--no-body-constraints`  
+Function: Disables soft body length constraints.  
+Accepted values: flag only.  
+Default: constraints enabled.
+
+`--body-length-smoothing-alpha`  
+Function: Controls how quickly learned limb lengths adapt over time.  
+Accepted range: float in `(0, 1]`.  
+Default: `0.15`
+
+`--body-length-correction`  
+Function: Controls how strongly each frame is pulled toward learned limb lengths.  
+Accepted range: float in `(0, 1]`.  
+Default: `0.35`
+
+`--no-export-cleanup`  
+Function: Disables offline export interpolation, spike cleanup, smoothing, and foot lock.  
+Accepted values: flag only.  
+Default: cleanup enabled.
+
+`--export-cleanup-smoothing-alpha`  
+Function: EMA factor used while smoothing exported JSON/FBX motion.  
+Accepted range: float in `(0, 1]`.  
+Default: `0.55`
+
+`--export-cleanup-max-velocity`  
+Function: Maximum per-frame joint movement before export cleanup treats a point as a spike.  
+Accepted range: float `> 0`.  
+Default: `220.0`
+
+`--no-foot-lock`  
+Function: Disables export-time planted-foot stabilization.  
+Accepted values: flag only.  
+Default: foot lock enabled.
+
+`--foot-lock-velocity`  
+Function: Maximum per-frame foot movement considered planted during export cleanup.  
+Accepted range: float `> 0`.  
+Default: `8.0`
+
+`--foot-lock-max-lift`  
+Function: Maximum distance from the detected floor for export foot locking.  
+Accepted range: float `>= 0`.  
+Default: `16.0`
 
 ## Preview Toggle
 
