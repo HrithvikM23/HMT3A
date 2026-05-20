@@ -141,7 +141,7 @@ After sources are resolved, Kinara builds a `PipelineConfig`. This object is the
 
 Key groups of config fields:
 
-- model fields: body backend, hand backend, model paths, hand model preset, ONNX input names, input sizes
+- model fields: body backend, hand backend, YOLO model path, MediaPipe pose model name/path, hand model preset, ONNX input names, input sizes
 - detection thresholds: body confidence, IOU, hand detection and keypoint thresholds
 - hand geometry fields: crop size, scale, forward shift, wrist offset tolerance
 - smoothing fields: alpha values, hold-frame counts, confidence decay
@@ -619,6 +619,7 @@ If you need to change the project, these are the best entry points.
 
 - start in `utils/model_assets.py`
 - update `prepare_model_assets()` in `runtime_config.py`
+- use `--model yolo11n-pose.pt` for YOLO mode or `--model pose_landmark_full.tflite` for MediaPipe mode
 - keep `ONNXPoseHandRunner.detect_bodies()` returning the existing body-detection contract
 
 ### Change hand crop behavior
@@ -654,6 +655,8 @@ The design is intentionally conservative:
 - simple module boundaries
 - explicit data contracts
 - detector output stays close to image space until export needs a richer representation
+- Single-camera exports stay flat in depth by default; MediaPipe world-landmark relative Z is available only when `--single-camera-depth mediapipe` is selected
+- `--processing-width` can downscale the inference frame for speed while preserving original-size rendered output
 - temporal state is owned locally by the object that needs it
 - exporters are downstream of stabilization, not mixed into inference
 - Blender import is decoupled from capture-time runtime decisions

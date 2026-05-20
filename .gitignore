@@ -35,6 +35,8 @@ tmp_test/
 *.pth
 *.pt
 *.onnx
+*.tflite
+*.binarypb
 
 # ----------------------
 # OS / Editor junk

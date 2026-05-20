@@ -32,7 +32,7 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 
 ## `runtime_config.py`
 
-- `prepare_model_assets`: Resolves and downloads body and hand models before inference starts.
+- `prepare_model_assets`: Resolves and stages body, hand, and MediaPipe assets before inference starts.
 - `validate_config`: Performs runtime sanity checks on the resolved `PipelineConfig`.
 - `prepare_runtime_config`: Calls `prepare_model_assets` and `validate_config`; used at the start of each runtime mode.
 - `build_config_for_assignment`: Creates the config for a single labeled assignment.
@@ -118,11 +118,11 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 
 ### `ONNXPoseHandRunner`
 
-- `ONNXPoseHandRunner.__init__`: Loads the YOLO body model and ONNX hand session from the resolved config.
-- `ONNXPoseHandRunner.detect_body`: Convenience wrapper that returns the top detected body or an all-zero 17-point fallback.
+- `ONNXPoseHandRunner.__init__`: Loads only the configured YOLO, ONNX, and MediaPipe runners needed by the resolved config.
+- `ONNXPoseHandRunner.detect_body`: Convenience wrapper that returns the top detected body or an all-zero fallback; MediaPipe mode also records relative depth that can be exported when single-camera MediaPipe depth is enabled.
 - `ONNXPoseHandRunner._to_numpy`: Converts PyTorch-like or NumPy-like tensor outputs into concrete NumPy arrays.
 - `ONNXPoseHandRunner.detect_bodies`: Runs YOLO prediction or tracker mode, converts model outputs into `BodyDetection` records, sorts by confidence, and caps the result count.
-- `ONNXPoseHandRunner.detect_hand`: Crops the hand region, normalizes it into the ONNX model input format, runs the hand model, and converts the winning detection row into 21 image-space points.
+- `ONNXPoseHandRunner.detect_hand`: Crops the hand region, runs the configured hand backend, converts detections into 21 image-space points, and records MediaPipe hand depth when available.
 
 ## `pipeline/pipeline.py`
 
@@ -130,7 +130,7 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 
 - `PoseHandPipeline.__init__`: Stores shared references to config, runner, smoother, and OSC sender.
 - `PoseHandPipeline.process_frame`: Convenience wrapper that detects and renders pose for one frame and returns the mutated frame.
-- `PoseHandPipeline.detect_pose`: Runs body detection or predicts skipped frames from recent motion, smooths body points, and then calls `detect_hands`.
+- `PoseHandPipeline.detect_pose`: Runs body detection or predicts skipped frames from recent motion, smooths body points, carries optional detector depth metadata, and then calls `detect_hands`.
 - `PoseHandPipeline.detect_hands`: Builds wrist-centered crops, runs or predicts hand inference according to cadence settings, validates results, smooths hands, anchors them to wrists, enforces constraints, and falls back to generated default hands when needed.
 - `PoseHandPipeline.render_pose`: Draws body and hands on the frame and optionally sends live UDP.
 - `PoseHandPipeline._draw_body`: Draws body skeleton edges and confident body keypoints.
@@ -235,6 +235,8 @@ The implementation is split across:
 - `_download_to_path`: Downloads a model atomically through a `.part` temporary file.
 - `ensure_model_file`: Ensures a model described by `ModelSpec` exists in the project tree.
 - `ensure_body_model_file`: Resolves a body model path or downloads a known YOLO pose model into `models/body`.
+- `ensure_mediapipe_pose_model_file`: Stages a MediaPipe pose TFLite model in `models/body`.
+- `ensure_mediapipe_hand_asset_files`: Stages MediaPipe hand TFLite assets in `models/hand/mediapipe`.
 
 ## `utils/multi_person.py`
 

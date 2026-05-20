@@ -6,7 +6,7 @@
 Function: Selects the app-facing runtime mode.  
 Accepted values: `fastest`, `mid`, `quality`.  
 Default: `quality`  
-Notes: `fastest` uses the light body model, FP16 body inference on CUDA when available, fewer hand crop attempts, and prediction between model frames. `mid` balances speed and stability. `quality` keeps the heaviest defaults for offline renders. Any explicit argument you pass with a profile overrides that profile value.
+Notes: `fastest` uses the light body model, FP16 body inference on CUDA when available, a 640px processing frame, and reduced hand cadence without skipping body detection. `mid` balances speed and stability. `quality` keeps the heaviest defaults for offline renders. Any explicit argument you pass with a profile overrides that profile value.
 
 `--calibrate-cameras`  
 Function: Creates a calibrated camera TOML from synchronized Charuco calibration videos.  
@@ -60,16 +60,16 @@ Recommended board: 7 x 5 Charuco squares, 35 mm square size, 28 mm marker size. 
 ## Model Selection
 
 `--model`  
-Function: Selects the body pose model file used by Ultralytics YOLO.  
-Accepted values: a model filename like `yolo11x-pose.pt`, `yolo11l-pose.pt`, `yolo11m-pose.pt`, `yolo11s-pose.pt`, `yolo11n-pose.pt`, or a custom local path.  
-Default: `yolo11x-pose.pt`  
-Notes: If you pass one of the known YOLO filenames and it is missing, it is downloaded into `models/body/`.
+Function: Selects the body model for the active landmark backend. With YOLO it selects the Ultralytics pose weights. With MediaPipe it selects the MediaPipe pose landmark TFLite asset.  
+Accepted values: YOLO filenames like `yolo11x-pose.pt`, `yolo11l-pose.pt`, `yolo11m-pose.pt`, `yolo11s-pose.pt`, `yolo11n-pose.pt`, a custom local YOLO path, or MediaPipe pose names `pose_landmark_lite.tflite`, `pose_landmark_full.tflite`, `pose_landmark_heavy.tflite`.  
+Default: `yolo11x-pose.pt` for YOLO mode, `pose_landmark_full.tflite` for MediaPipe mode.  
+Notes: Known YOLO models are stored in `models/body/`. MediaPipe pose TFLite assets are also staged in `models/body/`; MediaPipe hand TFLite assets are staged in `models/hand/mediapipe/` when that backend is used. MediaPipe may still need a runtime compatibility copy inside its Python package, but Kinara keeps the managed copy in `models/`.
 
 `--landmark-backend`  
-Function: Compatibility shortcut for older commands. Prefer `--body-backend` and `--hand-backend` for new runs.  
+Function: Selects the high-level landmark backend family.  
 Accepted values: `yolo`, `mediapipe`, `hybrid`.  
 Default: `yolo`  
-Notes: `yolo` maps to `--body-backend yolo --hand-backend onnx`. `mediapipe` maps to `--body-backend mediapipe --hand-backend mediapipe`. `hybrid` maps to MediaPipe body/hands with backend fallbacks enabled.
+Notes: `yolo` maps to `--body-backend yolo --hand-backend onnx`. `mediapipe` maps to `--body-backend mediapipe --hand-backend mediapipe`. `hybrid` maps to MediaPipe body/hands with backend fallbacks enabled. Use `--model` to pick `pose_landmark_lite.tflite`, `pose_landmark_full.tflite`, or `pose_landmark_heavy.tflite` when MediaPipe body landmarks are active.
 
 `--body-backend`  
 Function: Selects the body landmark backend.  
@@ -120,6 +120,13 @@ Default: disabled in `quality`, enabled by `fastest` and `mid`.
 Function: Sets the square resize dimension for the hand crop input.  
 Accepted range: integer `> 0`.  
 Default: `640`
+
+`--processing-width`  
+Function: Runs body and hand landmark detection on a resized working frame, then scales landmarks back to the original output frame.  
+Accepted range: integer `>= 0`.  
+Default: `0`  
+Notes: `0` uses the source resolution. Values such as `480` or `720` are useful for fast preview and webcam runs, especially with 1080p or 2K input. The saved render keeps the original video size.
+When enabled, startup logs print the actual source size and inference size, for example `source 1920x1080 -> inference 640x360`.
 
 ## Detection Thresholds
 
@@ -251,6 +258,12 @@ Function: Scales the estimated multi-camera depth used in fused 3D joint exports
 Accepted range: float `> 0`.  
 Default: `1.0`
 
+`--single-camera-depth`  
+Function: Selects how single-camera exports handle depth.  
+Accepted values: `flat`, `mediapipe`.  
+Default: `flat`  
+Notes: `flat` keeps single-camera output on a stable Z plane. This avoids fake-depth twisting when no calibrated second camera exists. `mediapipe` uses MediaPipe world-landmark relative Z when available, but it is not calibrated real-world depth.
+
 `--yolo-tracker`  
 Function: Sets the Ultralytics tracker config used for multi-person tracking.  
 Accepted values: tracker config names like `botsort.yaml` or `bytetrack.yaml`.  
@@ -267,7 +280,7 @@ Default: automatic
 Function: Runs body/person detection every N frames and predicts skipped frames from recent motion.  
 Accepted range: integer `> 0`.  
 Default: `1`  
-Notes: `1` keeps old behavior. `2` can nearly halve body model calls, with slightly more prediction during fast motion.
+Notes: `1` keeps the most stable body tracking. `2` can nearly halve body model calls, but fast motion may split limbs or tracks.
 
 `--hand-detect-interval`  
 Function: Runs hand inference every N frames and translates the last hand landmarks on skipped frames.  
@@ -286,6 +299,11 @@ Function: Prints render throughput every N seconds.
 Accepted range: float `>= 0`.  
 Default: `0`  
 Notes: `0` disables logging.
+
+`--no-fps-overlay`  
+Function: Disables the FPS tracker drawn into preview and saved output video frames.  
+Accepted values: flag only.  
+Default: FPS overlay enabled.
 
 ## Live UDP Output
 

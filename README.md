@@ -113,7 +113,7 @@ Rendered Output / JSON / FBX / Live UDP
 
 ## Body Tracking
 
-Body tracking uses an Ultralytics YOLO pose model.
+Body tracking uses an Ultralytics YOLO pose model by default. If you select the MediaPipe backend, the body model is a MediaPipe pose landmark TFLite asset.
 
 Default body model:
 
@@ -121,13 +121,23 @@ Default body model:
 yolo11x-pose.pt
 ```
 
-You can replace it with any compatible YOLO pose weights file through `--model`.
+You can replace the YOLO weights with any compatible YOLO pose file through `--model`. In MediaPipe mode, use the actual MediaPipe model filename with `--model`, for example `pose_landmark_full.tflite`.
 
 If you pass a known YOLO filename such as `yolo11x-pose.pt`, `yolo11l-pose.pt`, `yolo11m-pose.pt`, `yolo11s-pose.pt`, or `yolo11n-pose.pt` and it is missing, Kinara downloads it directly into:
 
 ```txt
 models/body/
 ```
+
+MediaPipe pose model names are:
+
+```txt
+pose_landmark_lite.tflite
+pose_landmark_full.tflite
+pose_landmark_heavy.tflite
+```
+
+Kinara stages MediaPipe pose TFLite assets in `models/body/`. MediaPipe hand TFLite assets are staged in `models/hand/mediapipe/` when MediaPipe hands are enabled.
 
 ## Hand Tracking
 
@@ -353,6 +363,16 @@ Realtime preview mode:
 py main.py --source ".\video.mp4" --profile fastest --fps-log-interval 1
 ```
 
+Fast preview on high-resolution clips:
+
+```bash
+py main.py --source ".\video.mp4" --profile fastest --processing-width 640
+```
+
+The output video stays at the original video size; only the model's working frame is reduced. The run prints a one-time line such as `source 1920x1080 -> inference 640x360` so you can confirm the scale.
+
+Saved videos include an FPS tracker overlay by default. Add `--no-fps-overlay` to hide it.
+
 Balanced mode:
 
 ```bash
@@ -362,7 +382,13 @@ py main.py --source ".\video.mp4" --profile mid
 MediaPipe body and hand mode:
 
 ```bash
-py main.py --source ".\video.mp4" --body-backend mediapipe --hand-backend mediapipe
+py main.py --source ".\video.mp4" --landmark-backend mediapipe --model pose_landmark_full.tflite
+```
+
+Single-camera exports are flat in depth by default because one camera cannot reconstruct reliable metric 3D. To experiment with MediaPipe world-landmark relative Z, add:
+
+```bash
+py main.py --source ".\video.mp4" --landmark-backend mediapipe --single-camera-depth mediapipe
 ```
 
 YOLO body with MediaPipe hands:
