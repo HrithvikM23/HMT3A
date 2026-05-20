@@ -11,6 +11,7 @@ from pipeline.pipeline import PoseHandPipeline
 from utils.color_profile import ColorProfile, color_profile_similarity
 from utils.hand_constraints import enforce_hand_constraints
 from utils.hand_fallback import generate_default_hand
+from utils.payloads import HandPayload
 from utils.smoothing import LandmarkSmoother
 
 Point = tuple[int, int, float]
@@ -64,7 +65,8 @@ class PersonTrack:
     missed_frames: int = 0
     label: str | None = None
     body_points: list[Point] = field(default_factory=list)
-    hands_by_side: dict[str, dict] = field(default_factory=dict)
+    hands_by_side: dict[str, HandPayload] = field(default_factory=dict)
+    joint_depths: dict[str, float] = field(default_factory=dict)
     velocity: tuple[float, float] = (0.0, 0.0)
     color_signature: ColorProfile = field(default_factory=dict)
     detection_score: float = 0.0
@@ -173,8 +175,8 @@ def _translate_body_points(points: list[Point], offset_x: int, offset_y: int) ->
     return [(x + offset_x, y + offset_y, conf) for x, y, conf in points]
 
 
-def _translate_hands(hands_by_side: dict[str, dict], offset_x: int, offset_y: int) -> dict[str, dict]:
-    translated: dict[str, dict] = {}
+def _translate_hands(hands_by_side: dict[str, HandPayload], offset_x: int, offset_y: int) -> dict[str, HandPayload]:
+    translated: dict[str, HandPayload] = {}
     for side, payload in hands_by_side.items():
         x1, y1, x2, y2 = payload["box"]
         translated[side] = {
@@ -184,6 +186,29 @@ def _translate_hands(hands_by_side: dict[str, dict], offset_x: int, offset_y: in
     return translated
 
 
+def _build_inference_frame(frame, processing_width: int):
+    frame_height, frame_width = frame.shape[:2]
+    if processing_width <= 0 or frame_width <= processing_width:
+        return frame, 1.0, 1.0
+    target_height = max(1, int(round(frame_height * (processing_width / float(frame_width)))))
+    resized = cv2.resize(frame, (processing_width, target_height), interpolation=cv2.INTER_AREA)
+    return resized, frame_width / float(processing_width), frame_height / float(target_height)
+
+
+def _scale_box(box: Box, scale_x: float, scale_y: float) -> Box:
+    x1, y1, x2, y2 = box
+    return (
+        int(round(x1 * scale_x)),
+        int(round(y1 * scale_y)),
+        int(round(x2 * scale_x)),
+        int(round(y2 * scale_y)),
+    )
+
+
+def _scale_body_points(points: list[Point], scale_x: float, scale_y: float) -> list[Point]:
+    return [(int(round(x * scale_x)), int(round(y * scale_y)), conf) for x, y, conf in points]
+
+
 class MultiPersonTracker:
     def __init__(self, config, runner):
         self.config = config
@@ -191,6 +216,7 @@ class MultiPersonTracker:
         self._tracks: list[PersonTrack] = []
         self._next_id = 1
         self._frame_index = 0
+        self._processing_size_logged = False
 
     def update(self, frame) -> list[PersonTrack]:
         if self._should_run_person_model():
@@ -221,27 +247,55 @@ class MultiPersonTracker:
             track.box = (x1 + offset_x, y1 + offset_y, x2 + offset_x, y2 + offset_y)
             track.body_points = _translate_body_points(track.body_points, offset_x, offset_y)
             track.hands_by_side = track.pipeline.detect_hands(frame, track.body_points)
+            track.joint_depths = dict(track.pipeline.last_joint_depths)
             track.detection_score *= self.config.hold_confidence_decay
             updated_tracks.append(track)
 
         self._tracks = updated_tracks[: self.config.max_people]
 
     def _detect_people(self, frame) -> list[PersonDetection]:
-        raw_detections = self.runner.detect_bodies(frame, max_people=self.config.max_people, track=True)
+        inference_frame, output_scale_x, output_scale_y = self._build_inference_frame(frame)
+        raw_detections = self.runner.detect_bodies(inference_frame, max_people=self.config.max_people, track=True)
         frame_height, frame_width = frame.shape[:2]
         detections: list[PersonDetection] = []
         for detection in raw_detections:
-            expanded_box = _expand_box(detection["box"], frame_width, frame_height, self.config.person_box_scale)
+            scaled_box = _scale_box(detection["box"], output_scale_x, output_scale_y)
+            expanded_box = _expand_box(scaled_box, frame_width, frame_height, self.config.person_box_scale)
             detections.append(
                 PersonDetection(
                     track_id=detection["id"],
                     box=expanded_box,
-                    body_points=detection["body_points"],
+                    body_points=_scale_body_points(detection["body_points"], output_scale_x, output_scale_y),
                     score=float(detection["score"]),
                     color_scores=_color_scores(frame, expanded_box),
                 )
             )
         return detections
+
+    def _build_inference_frame(self, frame):
+        target_width = int(getattr(self.config, "processing_width", 0) or 0)
+        inference_frame, output_scale_x, output_scale_y = _build_inference_frame(frame, target_width)
+        self._log_processing_size(frame, inference_frame, target_width)
+        return inference_frame, output_scale_x, output_scale_y
+
+    def _log_processing_size(self, frame, inference_frame, target_width: int) -> None:
+        if self._processing_size_logged or target_width <= 0:
+            return
+        self._processing_size_logged = True
+        frame_height, frame_width = frame.shape[:2]
+        inference_height, inference_width = inference_frame.shape[:2]
+        if inference_width == frame_width and inference_height == frame_height:
+            print(
+                f"[processing] source {frame_width}x{frame_height}; "
+                f"--processing-width {target_width} does not downscale this source"
+            )
+            return
+        scale_x = frame_width / float(inference_width)
+        scale_y = frame_height / float(inference_height)
+        print(
+            f"[processing] source {frame_width}x{frame_height} -> inference {inference_width}x{inference_height} "
+            f"(scale {scale_x:.2f}x, {scale_y:.2f}x)"
+        )
 
     def _associate_tracks(self, frame, detections: list[PersonDetection]) -> None:
         assignments: dict[int, int] = {}
@@ -380,6 +434,7 @@ class MultiPersonTracker:
         track.missed_frames = 0
         track.body_points = body_points
         track.hands_by_side = hands_by_side
+        track.joint_depths = dict(track.pipeline.last_joint_depths)
         track.color_signature = _blend_color_scores(track.color_signature, detection.color_scores)
         track.detection_score = detection.score
         self._refresh_track_label(track, detection)

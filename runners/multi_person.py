@@ -9,9 +9,10 @@ from network.osc_sender import OSCSender
 from runtime_config import prepare_runtime_config
 from runners.common import build_person_payload, draw_person_overlay, print_saved_paths
 from utils.exports import export_multi_person_fbx_bundle, export_multi_person_json
-from utils.fps import FpsMeter
+from utils.fps import FpsMeter, draw_fps_overlay
 from utils.motion_cleanup import cleanup_multi_person_frames
 from utils.multi_person import MultiPersonTracker
+from utils.payloads import PersonPayload
 
 
 def run_multi_person_assignment(config: PipelineConfig) -> None:
@@ -38,11 +39,12 @@ def run_multi_person_assignment(config: PipelineConfig) -> None:
             if not ok or frame is None:
                 break
 
-            payload_people: list[dict[str, object]] = []
+            payload_people: list[PersonPayload] = []
             for track in tracker.update(frame):
                 track.pipeline.render_pose(frame, track.body_points, track.hands_by_side, send_osc=False)
                 label = track.label or f"person{track.id}"
                 draw_person_overlay(frame, label, track.box, track.detection_score)
+                joint_depths = track.joint_depths if config.single_camera_depth_mode == "mediapipe" else None
                 payload_people.append(
                     build_person_payload(
                         person_id=track.id,
@@ -51,6 +53,7 @@ def run_multi_person_assignment(config: PipelineConfig) -> None:
                         score=track.detection_score,
                         body_points=track.body_points,
                         hands_by_side=track.hands_by_side,
+                        joint_depths=joint_depths,
                         camera_views=["FRONT"],
                     )
                 )
@@ -63,11 +66,13 @@ def run_multi_person_assignment(config: PipelineConfig) -> None:
                     "profile": config.profile,
                     "body_backend": config.body_backend,
                     "hand_backend": config.hand_backend,
+                    "mediapipe_pose_model": config.mediapipe_pose_model,
                     "source": str(config.video_path),
                 },
             )
             motion_frames.append({"frame_index": frame_index, "people": payload_people})
             fps_meter.tick(frame_index)
+            draw_fps_overlay(frame, fps_meter, config.fps_overlay_enabled)
             frame_index += 1
             session.write(frame)
 
@@ -90,6 +95,7 @@ def run_multi_person_assignment(config: PipelineConfig) -> None:
             "profile": config.profile,
             "body_backend": config.body_backend,
             "hand_backend": config.hand_backend,
+            "mediapipe_pose_model": config.mediapipe_pose_model,
             "source": str(config.video_path),
             "max_people": config.max_people,
             "identity_hints": {key: list(value) for key, value in config.identity_hints.items()},

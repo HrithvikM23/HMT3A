@@ -3,16 +3,53 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from backend_selection import needs_onnx_hand, needs_yolo_body, resolve_backend_selection
+from backend_selection import needs_mediapipe, needs_onnx_hand, needs_yolo_body, resolve_backend_selection
 from cli import InputAssignment, sanitize_label
 from config import PipelineConfig
-from utils.model_assets import DEFAULT_BODY_MODEL, HAND_MODEL_SPECS, ensure_body_model_file, ensure_model_file
+from mediapipe_models import (
+    DEFAULT_MEDIAPIPE_POSE_MODEL,
+    is_mediapipe_pose_model,
+    mediapipe_pose_model_names,
+    normalize_mediapipe_pose_model,
+)
+from utils.model_assets import (
+    DEFAULT_BODY_MODEL,
+    HAND_MODEL_SPECS,
+    ensure_body_model_file,
+    ensure_mediapipe_hand_asset_files,
+    ensure_mediapipe_pose_model_file,
+    ensure_model_file,
+)
 
 
 DEFAULT_PROVIDER_NAMES = ("CUDAExecutionProvider",)
 
 
+def resolve_body_model_settings(
+    requested_model: str | Path | None,
+    body_backend: str,
+) -> tuple[str | Path | None, str, str]:
+    if body_backend == "mediapipe":
+        mediapipe_model = (
+            normalize_mediapipe_pose_model(requested_model)
+            if is_mediapipe_pose_model(requested_model)
+            else DEFAULT_MEDIAPIPE_POSE_MODEL
+        )
+        return None, DEFAULT_BODY_MODEL, mediapipe_model
+
+    return requested_model, str(requested_model or DEFAULT_BODY_MODEL), DEFAULT_MEDIAPIPE_POSE_MODEL
+
+
 def prepare_model_assets(config: PipelineConfig) -> None:
+    if needs_mediapipe(config.body_backend, config.hand_backend, config.enable_backend_fallbacks):
+        if config.body_backend == "mediapipe" or config.enable_backend_fallbacks:
+            config.mediapipe_pose_model_path = ensure_mediapipe_pose_model_file(
+                config.project_root,
+                config.mediapipe_pose_model,
+            )
+        if config.hand_backend == "mediapipe" or config.enable_backend_fallbacks:
+            ensure_mediapipe_hand_asset_files(config.project_root)
+
     if needs_yolo_body(config.body_backend, config.enable_backend_fallbacks) and config.body_model_path is None:
         config.body_model_path = config.body_model_variant or DEFAULT_BODY_MODEL
     if needs_yolo_body(config.body_backend, config.enable_backend_fallbacks):
@@ -70,11 +107,15 @@ def validate_config(config: PipelineConfig) -> bool:
     if config.hand_backend not in {"onnx", "mediapipe"}:
         print(f"Error: invalid hand backend: {config.hand_backend}")
         return False
+    if config.body_backend == "mediapipe" and config.mediapipe_pose_model not in mediapipe_pose_model_names():
+        accepted = ", ".join(mediapipe_pose_model_names())
+        print(f"Error: invalid MediaPipe pose model: {config.mediapipe_pose_model}. Accepted values: {accepted}")
+        return False
     if config.body_backend == "mediapipe" and config.max_people > 1:
         print("Error: MediaPipe body backend currently supports one person. Use --body-backend yolo for multi-person.")
         return False
     missing_paths = [
-        path for path in (config.hand_model_path,)
+        path for path in (config.hand_model_path, config.mediapipe_pose_model_path)
         if path is not None and not Path(path).exists()
     ]
     if missing_paths:
@@ -134,6 +175,9 @@ def validate_config(config: PipelineConfig) -> bool:
         if value <= 0:
             print(f"Error: {field_name} must be positive: {value}")
             return False
+    if config.processing_width < 0:
+        print(f"Error: processing_width must be zero or greater: {config.processing_width}")
+        return False
     if config.person_box_scale <= 0:
         print(f"Error: person_box_scale must be positive: {config.person_box_scale}")
         return False
@@ -142,6 +186,9 @@ def validate_config(config: PipelineConfig) -> bool:
         return False
     if config.fused_depth_scale <= 0:
         print(f"Error: fused_depth_scale must be positive: {config.fused_depth_scale}")
+        return False
+    if config.single_camera_depth_mode not in {"flat", "mediapipe"}:
+        print(f"Error: invalid single_camera_depth_mode: {config.single_camera_depth_mode}")
         return False
     if config.enable_3d_triangulation and config.calibration_3d_path is None:
         print("Error: --triangulate-3d requires --calibration-3d.")
@@ -219,6 +266,7 @@ def _build_pipeline_config(
 ) -> PipelineConfig:
     calibration_3d_path = args.calibration_3d
     body_backend, hand_backend, enable_backend_fallbacks = resolve_backend_selection(args)
+    body_model_path, body_model_variant, mediapipe_pose_model = resolve_body_model_settings(args.model, body_backend)
     return PipelineConfig(
         video_path=video_path,
         output_path=output_path,
@@ -228,14 +276,16 @@ def _build_pipeline_config(
         body_backend=body_backend,
         hand_backend=hand_backend,
         enable_backend_fallbacks=enable_backend_fallbacks,
-        body_model_path=args.model,
+        body_model_path=body_model_path,
         hand_model_path=args.hand_model,
-        body_model_variant=args.model or DEFAULT_BODY_MODEL,
+        body_model_variant=body_model_variant,
+        mediapipe_pose_model=mediapipe_pose_model,
         hand_model_variant=args.hand_model_variant,
         hand_input_name=args.hand_input_name,
         hand_input_dtype="float32",
         body_input_size=args.body_input_size,
         hand_input_size=args.hand_input_size,
+        processing_width=args.processing_width,
         body_conf_threshold=args.body_conf_threshold,
         body_iou_threshold=args.body_iou_threshold,
         hand_det_threshold=args.hand_det_threshold,
@@ -281,6 +331,7 @@ def _build_pipeline_config(
         triangulation_smoothing_alpha=args.triangulation_smoothing_alpha,
         sync_offsets={label.upper(): offset for label, offset in (args.sync_offsets or [])},
         fused_depth_scale=args.fused_depth_scale,
+        single_camera_depth_mode=args.single_camera_depth,
         auto_performance_enabled=not args.no_auto_performance,
         yolo_tracker=args.yolo_tracker,
         yolo_device=args.yolo_device,
@@ -298,6 +349,7 @@ def _build_pipeline_config(
         export_foot_lock_velocity=args.foot_lock_velocity,
         export_foot_lock_max_lift=args.foot_lock_max_lift,
         fps_log_interval=args.fps_log_interval,
+        fps_overlay_enabled=not args.no_fps_overlay,
         identity_hints=dict(args.identity_hints or []),
     )
 

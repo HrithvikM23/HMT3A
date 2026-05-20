@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import cv2
+import math
 import numpy as np
+import shutil
+from pathlib import Path
 from typing import Any, TypedDict, cast
 
 from backend_selection import needs_mediapipe, needs_onnx_hand, needs_yolo_body
+from mediapipe_models import (
+    DEFAULT_MEDIAPIPE_POSE_MODEL,
+    mediapipe_pose_model_complexity,
+)
+from utils.skeleton import BODY_FOOT_NAME_TO_INDEX, BODY_NAME_TO_INDEX
 
 try:
     import onnxruntime as ort
@@ -63,11 +71,30 @@ def _resolve_provider_names(config) -> list[str]:
     return list(available_providers.values())
 
 
+def _mediapipe_pose_asset_exists(mp: Any, model_name: str) -> bool:
+    package_root = Path(mp.__file__).resolve().parent
+    model_path = package_root / "modules" / "pose_landmark" / model_name
+    return model_path.exists()
+
+
+def _sync_mediapipe_pose_asset(mp: Any, model_name: str, source_path: Path | None) -> None:
+    if _mediapipe_pose_asset_exists(mp, model_name):
+        return
+    if source_path is None or not source_path.exists():
+        return
+    package_root = Path(mp.__file__).resolve().parent
+    destination = package_root / "modules" / "pose_landmark" / model_name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, destination)
+
+
 class ONNXPoseHandRunner:
     def __init__(self, config):
         self.config = config
         self.body_model = None
         self.hand_session = None
+        self.last_body_depths: dict[str, float] = {}
+        self.last_hand_depths: list[float] | None = None
         self._uses_yolo_body = needs_yolo_body(config.body_backend, config.enable_backend_fallbacks)
         self._uses_onnx_hand = needs_onnx_hand(config.hand_backend, config.enable_backend_fallbacks)
         self._uses_mediapipe = needs_mediapipe(config.body_backend, config.hand_backend, config.enable_backend_fallbacks)
@@ -105,24 +132,60 @@ class ONNXPoseHandRunner:
 
         self._mp_available = True
         if self.config.body_backend == "mediapipe" or self.config.enable_backend_fallbacks:
-            self._mp_pose = mp.solutions.pose.Pose(
+            self._mp_pose = self._create_mediapipe_pose(mp)
+        if self.config.hand_backend == "mediapipe" or self.config.enable_backend_fallbacks:
+            mp_solutions = cast(Any, mp.solutions)
+            self._mp_hands = mp_solutions.hands.Hands(
                 static_image_mode=False,
-                model_complexity=0 if self.config.profile == "fastest" else 1,
+                max_num_hands=1,
+                model_complexity=1,
+                min_detection_confidence=self.config.hand_det_threshold,
+                min_tracking_confidence=self.config.hand_det_threshold,
+            )
+
+    def _create_mediapipe_pose(self, mp: Any):
+        requested_model = self.config.mediapipe_pose_model
+        selected_model = requested_model
+        model_path = self.config.mediapipe_pose_model_path
+        _sync_mediapipe_pose_asset(mp, selected_model, model_path)
+        if selected_model != DEFAULT_MEDIAPIPE_POSE_MODEL and not _mediapipe_pose_asset_exists(mp, selected_model):
+            print(
+                "Warning: MediaPipe pose model "
+                f"{selected_model} is not installed in this Python environment; "
+                f"using {DEFAULT_MEDIAPIPE_POSE_MODEL}."
+            )
+            selected_model = DEFAULT_MEDIAPIPE_POSE_MODEL
+            self.config.mediapipe_pose_model = selected_model
+
+        try:
+            return mp.solutions.pose.Pose(
+                static_image_mode=False,
+                model_complexity=mediapipe_pose_model_complexity(selected_model),
                 smooth_landmarks=False,
                 enable_segmentation=False,
                 min_detection_confidence=self.config.body_conf_threshold,
                 min_tracking_confidence=self.config.body_conf_threshold,
             )
-        if self.config.hand_backend == "mediapipe" or self.config.enable_backend_fallbacks:
-            self._mp_hands = mp.solutions.hands.Hands(
+        except Exception as exc:
+            if selected_model == DEFAULT_MEDIAPIPE_POSE_MODEL:
+                raise
+            print(
+                "Warning: MediaPipe pose model "
+                f"{selected_model} failed to initialize ({exc}); "
+                f"using {DEFAULT_MEDIAPIPE_POSE_MODEL}."
+            )
+            self.config.mediapipe_pose_model = DEFAULT_MEDIAPIPE_POSE_MODEL
+            return mp.solutions.pose.Pose(
                 static_image_mode=False,
-                max_num_hands=1,
-                model_complexity=0 if self.config.profile == "fastest" else 1,
-                min_detection_confidence=self.config.hand_det_threshold,
-                min_tracking_confidence=self.config.hand_det_threshold,
+                model_complexity=mediapipe_pose_model_complexity(DEFAULT_MEDIAPIPE_POSE_MODEL),
+                smooth_landmarks=False,
+                enable_segmentation=False,
+                min_detection_confidence=self.config.body_conf_threshold,
+                min_tracking_confidence=self.config.body_conf_threshold,
             )
 
     def detect_body(self, frame_bgr):
+        self.last_body_depths = {}
         if self.config.body_backend == "mediapipe":
             body_points = self._detect_body_mediapipe(frame_bgr)
             if body_points is not None:
@@ -177,7 +240,86 @@ class ONNXPoseHandRunner:
             py = int(round(float(landmark.y) * frame_height))
             confidence = float(getattr(landmark, "visibility", 1.0))
             body_points.append((px, py, confidence))
+        world_landmarks = None if result.pose_world_landmarks is None else result.pose_world_landmarks.landmark
+        self.last_body_depths = self._mediapipe_body_depths(
+            image_landmarks=landmarks,
+            world_landmarks=world_landmarks,
+            frame_width=frame_width,
+            frame_height=frame_height,
+        )
         return body_points
+
+    @staticmethod
+    def _distance2(first: Any, second: Any, width: int, height: int) -> float:
+        return math.hypot(
+            (float(first.x) - float(second.x)) * float(width),
+            (float(first.y) - float(second.y)) * float(height),
+        )
+
+    @staticmethod
+    def _distance3(first: Any, second: Any) -> float:
+        dx = float(first.x) - float(second.x)
+        dy = float(first.y) - float(second.y)
+        dz = float(first.z) - float(second.z)
+        return math.sqrt((dx * dx) + (dy * dy) + (dz * dz))
+
+    def _mediapipe_body_depths(
+        self,
+        image_landmarks: Any,
+        world_landmarks: Any,
+        frame_width: int,
+        frame_height: int,
+    ) -> dict[str, float]:
+        if not world_landmarks:
+            return {}
+
+        name_to_mp_index = {
+            "LeftShoulder": 11,
+            "RightShoulder": 12,
+            "LeftElbow": 13,
+            "RightElbow": 14,
+            "LeftWrist": 15,
+            "RightWrist": 16,
+            "LeftHip": 23,
+            "RightHip": 24,
+            "LeftKnee": 25,
+            "RightKnee": 26,
+            "LeftAnkle": 27,
+            "RightAnkle": 28,
+            "LeftFoot": 29,
+            "RightFoot": 30,
+            "LeftToeBase": 31,
+            "RightToeBase": 32,
+        }
+        scale_candidates = []
+        pixel_candidates = []
+        for first_index, second_index in ((11, 12), (23, 24), (11, 23), (12, 24)):
+            pixel_distance = self._distance2(image_landmarks[first_index], image_landmarks[second_index], frame_width, frame_height)
+            world_distance = self._distance3(world_landmarks[first_index], world_landmarks[second_index])
+            if pixel_distance > 1e-6 and world_distance > 1e-6:
+                scale_candidates.append(pixel_distance / world_distance)
+                pixel_candidates.append(pixel_distance)
+        if not scale_candidates:
+            return {}
+
+        world_to_pixel_scale = float(np.median(np.asarray(scale_candidates, dtype=np.float64)))
+        pixel_reference = max(float(np.median(np.asarray(pixel_candidates, dtype=np.float64))), 48.0)
+        max_depth = max(pixel_reference * 0.9, 64.0)
+        root_z = (float(world_landmarks[23].z) + float(world_landmarks[24].z)) * 0.5
+
+        depths = {
+            name: float(np.clip(-(float(world_landmarks[mp_index].z) - root_z) * world_to_pixel_scale, -max_depth, max_depth))
+            for name, mp_index in name_to_mp_index.items()
+            if name in BODY_NAME_TO_INDEX or name in BODY_FOOT_NAME_TO_INDEX
+        }
+        if "LeftHip" in depths and "RightHip" in depths:
+            depths["HipsRoot"] = (depths["LeftHip"] + depths["RightHip"]) * 0.5
+        if "LeftShoulder" in depths and "RightShoulder" in depths:
+            chest_depth = (depths["LeftShoulder"] + depths["RightShoulder"]) * 0.5
+            depths["Chest"] = chest_depth
+            depths["Neck"] = chest_depth
+            depths["Head"] = chest_depth
+        return depths
 
     @staticmethod
     def _to_numpy(value: Any, shape: tuple[int, ...], dtype: np.dtype[Any]) -> np.ndarray[Any, Any]:
@@ -259,6 +401,7 @@ class ONNXPoseHandRunner:
         return detections[:max_people]
 
     def detect_hand(self, frame_bgr, box):
+        self.last_hand_depths = None
         if self.config.hand_backend == "mediapipe":
             hand_points = self._detect_hand_mediapipe(frame_bgr, box)
             if hand_points is not None or not self.config.enable_backend_fallbacks:
@@ -279,7 +422,10 @@ class ONNXPoseHandRunner:
         hand_input = np.transpose(hand_input, (2, 0, 1))
         hand_input = np.expand_dims(hand_input, axis=0)
 
-        outputs = self.hand_session.run(None, {self.config.hand_input_name: hand_input})
+        hand_session = self.hand_session
+        if hand_session is None:
+            return None
+        outputs = hand_session.run(None, {self.config.hand_input_name: hand_input})
         detections = np.asarray(outputs[0], dtype=np.float32)[0]
 
         best = detections[np.argmax(detections[:, 4])]
@@ -317,11 +463,38 @@ class ONNXPoseHandRunner:
         landmarks = None if not result.multi_hand_landmarks else result.multi_hand_landmarks[0].landmark
         if not landmarks:
             return None
+        world_landmarks = None if not result.multi_hand_world_landmarks else result.multi_hand_world_landmarks[0].landmark
 
         points = []
         for landmark in landmarks:
             px = x1 + int(round(float(landmark.x) * crop_width))
             py = y1 + int(round(float(landmark.y) * crop_height))
-            confidence = 1.0 - min(abs(float(getattr(landmark, "z", 0.0))), 0.85)
+            relative_z = float(getattr(landmark, "z", 0.0))
+            confidence = 1.0 - min(abs(relative_z), 0.85)
             points.append((px, py, confidence))
+        self.last_hand_depths = self._mediapipe_hand_depths(landmarks, world_landmarks, crop_width, crop_height)
         return points
+
+    def _mediapipe_hand_depths(self, image_landmarks: Any, world_landmarks: Any, crop_width: int, crop_height: int) -> list[float] | None:
+        if not world_landmarks:
+            return None
+
+        scale_candidates = []
+        pixel_candidates = []
+        for first_index, second_index in ((0, 5), (0, 9), (0, 17), (5, 9), (9, 13), (13, 17)):
+            pixel_distance = self._distance2(image_landmarks[first_index], image_landmarks[second_index], crop_width, crop_height)
+            world_distance = self._distance3(world_landmarks[first_index], world_landmarks[second_index])
+            if pixel_distance > 1e-6 and world_distance > 1e-6:
+                scale_candidates.append(pixel_distance / world_distance)
+                pixel_candidates.append(pixel_distance)
+        if not scale_candidates:
+            return None
+
+        world_to_pixel_scale = float(np.median(np.asarray(scale_candidates, dtype=np.float64)))
+        pixel_reference = max(float(np.median(np.asarray(pixel_candidates, dtype=np.float64))), 12.0)
+        max_depth = max(pixel_reference * 0.8, 16.0)
+        root_z = float(world_landmarks[0].z)
+        return [
+            float(np.clip(-(float(landmark.z) - root_z) * world_to_pixel_scale, -max_depth, max_depth))
+            for landmark in world_landmarks
+        ]

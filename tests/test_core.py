@@ -1,26 +1,32 @@
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
 import json
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import numpy as np
 
 from cli import InputAssignment, build_parser, explicit_option_dests, resolve_sources
 from config import PipelineConfig
+from inference.rtmpose import ONNXPoseHandRunner
 from runners.fused_alignment import align_people_across_cameras
 from runtime_config import build_config_for_assignment, prepare_model_assets
 from runtime_profiles import apply_runtime_profile
 from utils.body_geometry import derive_foot_points
 from utils.fusion import DEFAULT_CAMERA_CALIBRATIONS, fuse_body_views, load_camera_calibrations
+from utils.fps import FpsMeter, draw_fps_overlay
 from utils.normalize import build_hand_box
 from utils.color_profile import color_profile_similarity
 from utils.exports import build_joint_map, export_motion_json
 from utils.hand_fallback import anchor_hand_to_wrist, has_usable_hand_detection, is_hand_detection_valid
 from utils.motion_cleanup import cleanup_motion_frames
 from utils.prediction import predict_points, translate_points
+from utils.skeleton import JointMap
 from utils.triangulation import apply_triangulated_overrides, triangulate_observation_frames
 from pipeline.pipeline import PoseHandPipeline
 
@@ -70,6 +76,23 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(config.hand_crop_retries, 1)
         self.assertEqual(config.fps_log_interval, 0.5)
 
+    def test_cli_single_camera_depth_mode_build_config(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "--source", "0",
+            "--single-camera-depth", "mediapipe",
+        ])
+        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+
+        self.assertEqual(config.single_camera_depth_mode, "mediapipe")
+
+    def test_cli_processing_width_build_config(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["--source", "0", "--processing-width", "480"])
+        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+
+        self.assertEqual(config.processing_width, 480)
+
     def test_runtime_profile_applies_without_overriding_explicit_knobs(self) -> None:
         parser = build_parser()
         argv = [
@@ -86,20 +109,23 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(config.body_model_variant, "yolo11n-pose.pt")
         self.assertEqual(config.hand_model_variant, "low")
         self.assertEqual(config.body_input_size, 640)
+        self.assertEqual(config.processing_width, 640)
         self.assertTrue(config.yolo_half)
         self.assertEqual(config.body_detect_interval, 1)
-        self.assertEqual(config.hand_detect_interval, 3)
+        self.assertEqual(config.hand_detect_interval, 2)
 
-    def test_fastest_profile_enables_skip_frame_cheats(self) -> None:
+    def test_fastest_profile_keeps_stable_detection_cadence(self) -> None:
         parser = build_parser()
         argv = ["--source", "0", "--profile", "fastest"]
         args = parser.parse_args(argv)
         apply_runtime_profile(args, explicit_option_dests(parser, argv))
         config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
 
-        self.assertEqual(config.body_detect_interval, 2)
-        self.assertEqual(config.hand_detect_interval, 3)
-        self.assertEqual(config.hand_crop_retries, 0)
+        self.assertEqual(config.processing_width, 640)
+        self.assertEqual(config.body_detect_interval, 1)
+        self.assertEqual(config.hand_detect_interval, 2)
+        self.assertEqual(config.hand_crop_retries, 1)
+        self.assertTrue(config.body_constraints_enabled)
         self.assertFalse(config.enable_backend_fallbacks)
 
     def test_cli_landmark_backend_build_config(self) -> None:
@@ -109,6 +135,33 @@ class CoreLogicTests(unittest.TestCase):
 
         self.assertEqual(config.body_backend, "mediapipe")
         self.assertEqual(config.hand_backend, "mediapipe")
+        self.assertEqual(config.mediapipe_pose_model, "pose_landmark_full.tflite")
+
+    def test_profile_yolo_model_does_not_pollute_mediapipe_backend(self) -> None:
+        parser = build_parser()
+        argv = ["--source", "0", "--landmark-backend", "mediapipe"]
+        args = parser.parse_args(argv)
+        apply_runtime_profile(args, explicit_option_dests(parser, argv))
+        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+
+        self.assertEqual(config.body_backend, "mediapipe")
+        self.assertIsNone(config.body_model_path)
+        self.assertEqual(config.body_model_variant, "yolo11x-pose.pt")
+        self.assertEqual(config.mediapipe_pose_model, "pose_landmark_full.tflite")
+
+    def test_cli_mediapipe_model_name_build_config(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "--source", "0",
+            "--landmark-backend", "mediapipe",
+            "--model", "pose_landmark_heavy.tflite",
+        ])
+        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+
+        self.assertEqual(config.body_backend, "mediapipe")
+        self.assertIsNone(config.body_model_path)
+        self.assertEqual(config.body_model_variant, "yolo11x-pose.pt")
+        self.assertEqual(config.mediapipe_pose_model, "pose_landmark_heavy.tflite")
 
     def test_cli_split_backends_build_config(self) -> None:
         parser = build_parser()
@@ -139,6 +192,10 @@ class CoreLogicTests(unittest.TestCase):
 
         self.assertIsNone(config.body_model_path)
         self.assertIsNone(config.hand_model_path)
+        self.assertIsNotNone(config.mediapipe_pose_model_path)
+        assert config.mediapipe_pose_model_path is not None
+        self.assertEqual(config.mediapipe_pose_model_path.name, "pose_landmark_full.tflite")
+        self.assertTrue(config.mediapipe_pose_model_path.exists())
 
     def test_mediapipe_hand_backend_uses_single_crop(self) -> None:
         config = PipelineConfig(hand_backend="mediapipe", hand_crop_retries=3)
@@ -153,6 +210,97 @@ class CoreLogicTests(unittest.TestCase):
         )
 
         self.assertEqual(boxes, [(20, 20, 80, 80)])
+
+    def test_processing_width_downscales_inference_frame(self) -> None:
+        config = PipelineConfig(processing_width=50)
+        pipeline = PoseHandPipeline(config, SimpleNamespace(), SimpleNamespace(), SimpleNamespace())
+        frame = np.zeros((100, 200, 3), dtype=np.uint8)
+
+        with redirect_stdout(io.StringIO()):
+            resized, scale_x, scale_y = pipeline._build_inference_frame(frame)
+
+        self.assertEqual(resized.shape[:2], (25, 50))
+        self.assertEqual(scale_x, 4.0)
+        self.assertEqual(scale_y, 4.0)
+
+    def test_processing_width_is_used_by_body_and_hand_models(self) -> None:
+        class Runner:
+            last_body_depths = {}
+            last_hand_depths = None
+
+            def __init__(self) -> None:
+                self.body_frame_shape: tuple[int, int, int] = (0, 0, 0)
+                self.hand_frame_shapes = []
+
+            def detect_body(self, frame):
+                self.body_frame_shape = (int(frame.shape[0]), int(frame.shape[1]), int(frame.shape[2]))
+                points = [(0, 0, 0.0) for _ in range(17)]
+                points[5] = (25, 25, 0.9)
+                points[6] = (35, 25, 0.9)
+                points[7] = (22, 35, 0.9)
+                points[8] = (38, 35, 0.9)
+                points[9] = (20, 45, 0.9)
+                points[10] = (40, 45, 0.9)
+                points[11] = (26, 50, 0.9)
+                points[12] = (34, 50, 0.9)
+                points[13] = (26, 65, 0.9)
+                points[14] = (34, 65, 0.9)
+                points[15] = (26, 80, 0.9)
+                points[16] = (34, 80, 0.9)
+                return points
+
+            def detect_hand(self, frame, box):
+                self.hand_frame_shapes.append(frame.shape)
+                return None
+
+        runner = Runner()
+        smoother = SimpleNamespace(
+            smooth_body=lambda points: points,
+            smooth_hand=lambda _side, points: points,
+        )
+        osc_sender = SimpleNamespace(send_pose=lambda _body, _hands: None)
+        config = PipelineConfig(processing_width=50, hand_crop_retries=0)
+        pipeline = PoseHandPipeline(config, runner, smoother, osc_sender)
+        frame = np.zeros((100, 200, 3), dtype=np.uint8)
+
+        with redirect_stdout(io.StringIO()) as stdout:
+            body_points, hands_by_side = pipeline.detect_pose(frame)
+
+        self.assertIn("source 200x100 -> inference 50x25", stdout.getvalue())
+        self.assertEqual(runner.body_frame_shape[:2], (25, 50))
+        self.assertTrue(runner.hand_frame_shapes)
+        self.assertTrue(all(shape[:2] == (25, 50) for shape in runner.hand_frame_shapes))
+        self.assertEqual(body_points[5][0], 100)
+        self.assertIn("left", hands_by_side)
+
+    def test_mediapipe_body_depth_uses_world_landmarks(self) -> None:
+        runner = ONNXPoseHandRunner.__new__(ONNXPoseHandRunner)
+        image_landmarks = [SimpleNamespace(x=0.5, y=0.5, z=0.0) for _ in range(33)]
+        world_landmarks = [SimpleNamespace(x=0.0, y=0.0, z=0.0) for _ in range(33)]
+        image_landmarks[11] = SimpleNamespace(x=0.4, y=0.3, z=0.0)
+        image_landmarks[12] = SimpleNamespace(x=0.6, y=0.3, z=0.0)
+        image_landmarks[23] = SimpleNamespace(x=0.45, y=0.6, z=0.0)
+        image_landmarks[24] = SimpleNamespace(x=0.55, y=0.6, z=0.0)
+        world_landmarks[11] = SimpleNamespace(x=-0.2, y=0.4, z=0.0)
+        world_landmarks[12] = SimpleNamespace(x=0.2, y=0.4, z=0.0)
+        world_landmarks[23] = SimpleNamespace(x=-0.15, y=0.0, z=0.0)
+        world_landmarks[24] = SimpleNamespace(x=0.15, y=0.0, z=0.0)
+        world_landmarks[15] = SimpleNamespace(x=-0.45, y=0.2, z=-0.2)
+
+        depths = runner._mediapipe_body_depths(image_landmarks, world_landmarks, 1000, 1000)
+
+        self.assertGreater(depths["LeftWrist"], 0.0)
+        self.assertLess(depths["LeftWrist"], 200.0)
+
+    def test_fps_overlay_draws_on_frame(self) -> None:
+        frame = np.zeros((80, 220, 3), dtype=np.uint8)
+        meter = FpsMeter("test", interval_seconds=0.0)
+        meter.current_fps = 59.5
+        meter.average_fps = 58.0
+
+        draw_fps_overlay(frame, meter, enabled=True)
+
+        self.assertGreater(int(frame.sum()), 0)
 
     def test_unlabeled_multi_sources_get_camera_labels(self) -> None:
         parser = build_parser()
@@ -236,6 +384,22 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(joints["LeftToeBase"]["x"], 82.0)
         self.assertEqual(joints["RightToeBase"]["x"], 158.0)
 
+    def test_build_joint_map_keeps_single_view_flat_by_default(self) -> None:
+        joints = build_joint_map(_body_points(), {})
+
+        self.assertEqual(joints["LeftToeBase"]["z"], 0.0)
+        self.assertEqual(joints["LeftWrist"]["z"], 0.0)
+
+    def test_build_joint_map_uses_supplied_dynamic_depths(self) -> None:
+        joints = build_joint_map(
+            _body_points(),
+            {},
+            joint_depths={"LeftWrist": 123.0, "RightWrist": -45.0},
+        )
+
+        self.assertEqual(joints["LeftWrist"]["z"], 123.0)
+        self.assertEqual(joints["RightWrist"]["z"], -45.0)
+
     def test_export_cleanup_interpolates_missing_joint(self) -> None:
         config = PipelineConfig()
         frames = [
@@ -246,8 +410,9 @@ class CoreLogicTests(unittest.TestCase):
 
         cleaned = cleanup_motion_frames(frames, config)
 
-        self.assertGreater(cleaned[1]["joints"]["LeftWrist"]["confidence"], 0.0)
-        self.assertGreater(cleaned[1]["joints"]["LeftWrist"]["x"], 0.0)
+        cleaned_joints = cast(JointMap, cleaned[1]["joints"])
+        self.assertGreater(cleaned_joints["LeftWrist"]["confidence"], 0.0)
+        self.assertGreater(cleaned_joints["LeftWrist"]["x"], 0.0)
 
     def test_prediction_projects_points_with_confidence_decay(self) -> None:
         previous = [(8, 10, 0.9), (20, 30, 0.5)]
@@ -398,7 +563,8 @@ class CoreLogicTests(unittest.TestCase):
 
         frame = {"frame_index": 0, "joints": build_joint_map(_body_points(), {})}
         updated_frames = apply_triangulated_overrides([frame], result)
-        left_shoulder = updated_frames[0]["joints"]["LeftShoulder"]
+        updated_joints = cast(JointMap, updated_frames[0]["joints"])
+        left_shoulder = updated_joints["LeftShoulder"]
 
         self.assertEqual(left_shoulder["x"], 105.0)
         self.assertEqual(left_shoulder["z"], 42.0)

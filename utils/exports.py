@@ -5,9 +5,11 @@ import math
 import re
 import statistics
 from pathlib import Path
+from collections.abc import Mapping
 from typing import cast
 
 from utils.body_geometry import derive_foot_points
+from utils.payloads import HandPayload
 from utils.skeleton import (
     BODY_FOOT_NAME_TO_INDEX,
     BODY_NAME_TO_INDEX,
@@ -81,6 +83,107 @@ def _lerp(start: float, end: float, alpha: float) -> float:
     return start + (end - start) * alpha
 
 
+def _point_distance(first: Point, second: Point) -> float:
+    return math.hypot(float(first[0] - second[0]), float(first[1] - second[1]))
+
+
+def _body_depth_scale(body_points: list[Point]) -> float:
+    candidates: list[float] = []
+    for first_index, second_index in ((5, 6), (11, 12), (5, 11), (6, 12)):
+        if len(body_points) <= max(first_index, second_index):
+            continue
+        first = body_points[first_index]
+        second = body_points[second_index]
+        if first[2] > 0.0 and second[2] > 0.0:
+            candidates.append(_point_distance(first, second))
+    return max(max(candidates or [48.0]), 24.0)
+
+
+def _apply_single_view_body_depths(body_points: list[Point], joint_depths: dict[str, float]) -> None:
+    scale = _body_depth_scale(body_points)
+    offsets = {
+        "HipsRoot": 0.00,
+        "Chest": -0.04,
+        "Neck": -0.06,
+        "Head": -0.10,
+        "LeftShoulder": -0.02,
+        "RightShoulder": -0.02,
+        "LeftElbow": 0.14,
+        "RightElbow": 0.14,
+        "LeftWrist": 0.24,
+        "RightWrist": 0.24,
+        "LeftHip": 0.00,
+        "RightHip": 0.00,
+        "LeftKnee": 0.16,
+        "RightKnee": 0.16,
+        "LeftAnkle": 0.28,
+        "RightAnkle": 0.28,
+        "LeftFoot": 0.40,
+        "RightFoot": 0.40,
+        "LeftToeBase": 0.58,
+        "RightToeBase": 0.58,
+    }
+    for joint_name, offset in offsets.items():
+        joint_depths.setdefault(joint_name, scale * offset)
+
+
+def _apply_single_view_hand_depths(
+    hands_by_side: Mapping[str, HandPayload],
+    joint_depths: dict[str, float],
+) -> None:
+    finger_depth_offsets = {
+        "Thumb1": 0.02,
+        "Thumb2": 0.08,
+        "Thumb3": 0.14,
+        "Thumb4": 0.20,
+        "Index1": 0.04,
+        "Index2": 0.12,
+        "Index3": 0.20,
+        "Index4": 0.28,
+        "Middle1": 0.05,
+        "Middle2": 0.14,
+        "Middle3": 0.24,
+        "Middle4": 0.34,
+        "Ring1": 0.04,
+        "Ring2": 0.12,
+        "Ring3": 0.20,
+        "Ring4": 0.28,
+        "Pinky1": 0.02,
+        "Pinky2": 0.08,
+        "Pinky3": 0.14,
+        "Pinky4": 0.20,
+    }
+    for side_key, side_label in (("left", "Left"), ("right", "Right")):
+        hand_payload = hands_by_side.get(side_key)
+        if hand_payload is None:
+            continue
+        hand_points = cast(list[Point], hand_payload["points"])
+        if not hand_points:
+            continue
+        wrist = hand_points[0]
+        farthest = max((_point_distance(wrist, point) for point in hand_points if point[2] > 0.0), default=24.0)
+        hand_scale = max(farthest, 16.0)
+        wrist_depth = joint_depths.get(f"{side_label}Wrist", 0.0)
+        for suffix, offset in finger_depth_offsets.items():
+            joint_depths.setdefault(f"{side_label}{suffix}", wrist_depth + hand_scale * offset)
+
+
+def _should_add_single_view_depths(joint_depths: dict[str, float]) -> bool:
+    return False
+
+
+def _resolve_joint_depths(
+    body_points: list[Point],
+    hands_by_side: Mapping[str, HandPayload],
+    joint_depths: dict[str, float] | None,
+) -> dict[str, float]:
+    resolved_depths = dict(joint_depths or {})
+    if _should_add_single_view_depths(resolved_depths):
+        _apply_single_view_body_depths(body_points, resolved_depths)
+        _apply_single_view_hand_depths(hands_by_side, resolved_depths)
+    return resolved_depths
+
+
 def _derive_head_joints(body_points: list[Point], joint_depths: dict[str, float]) -> tuple[JointValue, JointValue]:
     shoulders = [body_points[5], body_points[6]]
     hips = [body_points[11], body_points[12]]
@@ -127,6 +230,7 @@ def _derive_foot_chain(
     knee_point: Point,
     ankle_point: Point,
     foot_depth: float,
+    toe_depth: float,
 ) -> tuple[JointValue, JointValue]:
     foot_index = BODY_FOOT_NAME_TO_INDEX[f"{side_label}Foot"]
     toe_index = BODY_FOOT_NAME_TO_INDEX[f"{side_label}ToeBase"]
@@ -135,7 +239,7 @@ def _derive_foot_chain(
         toe_point = body_points[toe_index]
         if foot_point[2] > 0.0 and toe_point[2] > 0.0:
             foot_world = _to_world_float(foot_point[0], foot_point[1], foot_depth)
-            toe_world = _to_world_float(toe_point[0], toe_point[1], foot_depth)
+            toe_world = _to_world_float(toe_point[0], toe_point[1], toe_depth)
             return (
                 _make_joint(foot_world[0], foot_world[1], foot_world[2], foot_point[2]),
                 _make_joint(toe_world[0], toe_world[1], toe_world[2], toe_point[2]),
@@ -146,7 +250,7 @@ def _derive_foot_chain(
     toe_x, toe_y, _ = toe_point
 
     foot_world = _to_world_float(foot_x, foot_y, foot_depth)
-    toe_world = _to_world_float(toe_x, toe_y, foot_depth)
+    toe_world = _to_world_float(toe_x, toe_y, toe_depth)
     return (
         _make_joint(foot_world[0], foot_world[1], foot_world[2], derived_conf),
         _make_joint(toe_world[0], toe_world[1], toe_world[2], derived_conf),
@@ -155,11 +259,11 @@ def _derive_foot_chain(
 
 def build_joint_map(
     body_points: list[Point],
-    hands_by_side: dict[str, dict[str, object]],
+    hands_by_side: Mapping[str, HandPayload],
     joint_depths: dict[str, float] | None = None,
 ) -> JointMap:
     joint_map: JointMap = {joint.name: _zero_joint() for joint in SKELETON}
-    joint_depths = joint_depths or {}
+    joint_depths = _resolve_joint_depths(body_points, hands_by_side, joint_depths)
 
     for name, index in BODY_NAME_TO_INDEX.items():
         x, y, conf = body_points[index]
@@ -180,14 +284,16 @@ def build_joint_map(
         "Left",
         body_points[13],
         body_points[15],
-        joint_depths.get("LeftAnkle", 0.0),
+        joint_depths.get("LeftFoot", joint_depths.get("LeftAnkle", 0.0)),
+        joint_depths.get("LeftToeBase", joint_depths.get("LeftFoot", joint_depths.get("LeftAnkle", 0.0))),
     )
     joint_map["RightFoot"], joint_map["RightToeBase"] = _derive_foot_chain(
         body_points,
         "Right",
         body_points[14],
         body_points[16],
-        joint_depths.get("RightAnkle", 0.0),
+        joint_depths.get("RightFoot", joint_depths.get("RightAnkle", 0.0)),
+        joint_depths.get("RightToeBase", joint_depths.get("RightFoot", joint_depths.get("RightAnkle", 0.0))),
     )
 
     for side_label, hand_payload in (("Left", hands_by_side.get("left")), ("Right", hands_by_side.get("right"))):

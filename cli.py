@@ -6,6 +6,7 @@ from pathlib import Path
 
 import config as app_config
 from backend_selection import BODY_BACKENDS, HAND_BACKENDS, LANDMARK_BACKENDS
+from mediapipe_models import mediapipe_pose_model_names
 from runtime_profiles import PROFILE_NAMES, PROFILE_QUALITY
 
 
@@ -236,13 +237,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--charuco-marker-scale", type=float, default=0.8, help="Marker length as a fraction of square size.")
     parser.add_argument(
         "--model",
-        help="Body model filename or path, for example yolo11x-pose.pt or a local YOLO pose weights path.",
+        help=(
+            "Body model selector. In YOLO mode use a YOLO pose filename/path. "
+            f"In MediaPipe mode use one of: {', '.join(mediapipe_pose_model_names())}."
+        ),
     )
     parser.add_argument(
         "--landmark-backend",
         choices=LANDMARK_BACKENDS,
         default="yolo",
-        help="Compatibility shortcut. Prefer --body-backend and --hand-backend for new runs.",
+        help="Select the high-level landmark backend family: yolo, mediapipe, or hybrid.",
     )
     parser.add_argument(
         "--body-backend",
@@ -286,6 +290,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=640,
         help="Square input size for the hand model crop.",
+    )
+    parser.add_argument(
+        "--processing-width",
+        type=int,
+        default=0,
+        help="Optional downscaled inference width. 0 uses source resolution; 480 is good for fast preview.",
     )
     parser.add_argument(
         "--body-conf-threshold",
@@ -423,6 +433,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Depth scale multiplier used when estimating fused multi-camera joint depth.",
     )
     parser.add_argument(
+        "--single-camera-depth",
+        choices=("flat", "mediapipe"),
+        default="flat",
+        help="Single-camera export depth mode. flat is stable; mediapipe uses model-relative Z and can be noisy.",
+    )
+    parser.add_argument(
         "--no-auto-performance",
         action="store_true",
         help="Disable automatic GPU/FP16 and skip-frame performance choices.",
@@ -464,6 +480,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="Print render throughput every N seconds. 0 disables FPS logging.",
+    )
+    parser.add_argument(
+        "--no-fps-overlay",
+        action="store_true",
+        help="Disable the FPS tracker drawn into preview and output video frames.",
     )
     parser.add_argument(
         "--provider",

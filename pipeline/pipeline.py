@@ -8,7 +8,9 @@ from utils.body_geometry import derive_foot_points
 from utils.hand_constraints import enforce_hand_constraints
 from utils.hand_fallback import anchor_hand_to_wrist, generate_default_hand, has_usable_hand_detection, is_hand_detection_valid
 from utils.normalize import build_hand_box
+from utils.payloads import HandPayload
 from utils.prediction import predict_points, translate_box, translate_points
+from utils.skeleton import HAND_NAME_TO_INDEX
 
 
 class PoseHandPipeline:
@@ -24,6 +26,8 @@ class PoseHandPipeline:
         self._last_hand_by_side = {}
         self._last_wrist_by_side = {}
         self._body_constraints = BodyKinematicConstraints(config)
+        self.last_joint_depths: dict[str, float] = {}
+        self._processing_size_logged = False
 
     def process_frame(self, frame):
         body_points, hands_by_side = self.detect_pose(frame)
@@ -31,31 +35,106 @@ class PoseHandPipeline:
         return frame
 
     def detect_pose(self, frame):
+        inference_frame, output_scale_x, output_scale_y = self._build_inference_frame(frame)
         if self._should_run_body_model():
-            body_points = self.smoother.smooth_body(self.runner.detect_body(frame))
+            raw_body_points = self.runner.detect_body(inference_frame)
+            body_points = self.smoother.smooth_body(self._scale_points(raw_body_points, output_scale_x, output_scale_y))
+            detected_depths = self._scale_depths(
+                getattr(self.runner, "last_body_depths", {}) or {},
+                (output_scale_x + output_scale_y) * 0.5,
+            )
         else:
             body_points = predict_points(
                 self._last_body_points,
                 self._previous_body_points,
                 self.config.hold_confidence_decay,
             )
+            detected_depths = dict(self.last_joint_depths)
         if body_points is None:
             body_points = [(0, 0, 0.0) for _ in range(17)]
         body_points = self._body_constraints.apply(body_points)
         self._previous_body_points = self._last_body_points
         self._last_body_points = body_points
-        hands_by_side = self.detect_hands(frame, body_points)
+        self.last_joint_depths = detected_depths
+        body_points_for_hands = self._scale_points(body_points, 1.0 / output_scale_x, 1.0 / output_scale_y)
+        hands_by_side = self.detect_hands(
+            inference_frame,
+            body_points_for_hands,
+            output_scale=(output_scale_x, output_scale_y),
+        )
         self._frame_index += 1
         return body_points, hands_by_side
 
-    def detect_hands(self, frame, body_points):
+    def _build_inference_frame(self, frame):
+        target_width = int(getattr(self.config, "processing_width", 0) or 0)
         frame_height, frame_width = frame.shape[:2]
-        hands_by_side = {}
+        if target_width <= 0 or frame_width <= target_width:
+            self._log_processing_size(frame_width, frame_height, frame_width, frame_height, target_width)
+            return frame, 1.0, 1.0
+        target_height = max(1, int(round(frame_height * (target_width / float(frame_width)))))
+        resized = cv2.resize(frame, (target_width, target_height), interpolation=cv2.INTER_AREA)
+        self._log_processing_size(frame_width, frame_height, target_width, target_height, target_width)
+        return resized, frame_width / float(target_width), frame_height / float(target_height)
+
+    def _log_processing_size(
+        self,
+        frame_width: int,
+        frame_height: int,
+        inference_width: int,
+        inference_height: int,
+        target_width: int,
+    ) -> None:
+        if self._processing_size_logged or target_width <= 0:
+            return
+        self._processing_size_logged = True
+        if inference_width == frame_width and inference_height == frame_height:
+            print(
+                f"[processing] source {frame_width}x{frame_height}; "
+                f"--processing-width {target_width} does not downscale this source"
+            )
+            return
+        scale_x = frame_width / float(inference_width)
+        scale_y = frame_height / float(inference_height)
+        print(
+            f"[processing] source {frame_width}x{frame_height} -> inference {inference_width}x{inference_height} "
+            f"(scale {scale_x:.2f}x, {scale_y:.2f}x)"
+        )
+
+    @staticmethod
+    def _scale_point(point, scale_x: float, scale_y: float):
+        return (int(round(point[0] * scale_x)), int(round(point[1] * scale_y)), point[2])
+
+    @classmethod
+    def _scale_points(cls, points, scale_x: float, scale_y: float):
+        if points is None:
+            return None
+        return [cls._scale_point(point, scale_x, scale_y) for point in points]
+
+    @staticmethod
+    def _scale_box(box, scale_x: float, scale_y: float):
+        x1, y1, x2, y2 = box
+        return (
+            int(round(x1 * scale_x)),
+            int(round(y1 * scale_y)),
+            int(round(x2 * scale_x)),
+            int(round(y2 * scale_y)),
+        )
+
+    @staticmethod
+    def _scale_depths(depths, scale: float):
+        return {name: float(depth) * scale for name, depth in dict(depths).items()}
+
+    def detect_hands(self, frame, body_points, output_scale=(1.0, 1.0)) -> dict[str, HandPayload]:
+        frame_height, frame_width = frame.shape[:2]
+        hands_by_side: dict[str, HandPayload] = {}
         run_hand_model = self._should_run_hand_model()
+        output_scale_x, output_scale_y = output_scale
 
         for wrist_idx, elbow_idx in WRIST_TO_ELBOW.items():
             wrist_point = body_points[wrist_idx]
             elbow_point = body_points[elbow_idx]
+            wrist_output = self._scale_point(wrist_point, output_scale_x, output_scale_y)
+            elbow_output = self._scale_point(elbow_point, output_scale_x, output_scale_y)
 
             if wrist_point[2] <= self.config.body_conf_threshold or elbow_point[2] <= self.config.body_conf_threshold:
                 continue
@@ -72,34 +151,63 @@ class PoseHandPipeline:
             )
 
             raw_hand_points = None
+            raw_hand_depths = None
+            raw_hand_in_inference_space = True
             hand_box = box
             if run_hand_model:
-                raw_hand_points = self._detect_best_hand(frame, wrist_point, elbow_point, box)
+                detected_hand = self._detect_best_hand(frame, wrist_point, elbow_point, box)
+                if detected_hand is not None:
+                    raw_hand_points, raw_hand_depths = detected_hand
                 if raw_hand_points is None and self.config.enable_backend_fallbacks:
-                    predicted_hand = self._predict_hand(side, wrist_point)
+                    predicted_hand = self._predict_hand(side, wrist_output)
                     if predicted_hand is not None:
-                        hand_box, raw_hand_points = predicted_hand
+                        hand_box, raw_hand_points, raw_hand_depths = predicted_hand
+                        raw_hand_in_inference_space = False
             else:
-                predicted_hand = self._predict_hand(side, wrist_point)
+                predicted_hand = self._predict_hand(side, wrist_output)
                 if predicted_hand is not None:
-                    hand_box, raw_hand_points = predicted_hand
+                    hand_box, raw_hand_points, raw_hand_depths = predicted_hand
+                    raw_hand_in_inference_space = False
+
+            if raw_hand_in_inference_space and raw_hand_points is not None and (output_scale_x != 1.0 or output_scale_y != 1.0):
+                raw_hand_points = self._scale_points(raw_hand_points, output_scale_x, output_scale_y)
+                hand_box = self._scale_box(hand_box, output_scale_x, output_scale_y)
+                if raw_hand_depths is not None:
+                    raw_hand_depths = [float(depth) * ((output_scale_x + output_scale_y) * 0.5) for depth in raw_hand_depths]
 
             hand_points = self.smoother.smooth_hand(side, raw_hand_points)
+            hand_depths = raw_hand_depths
             if hand_points is not None:
                 hand_points = enforce_hand_constraints(hand_points)
-                if not is_hand_detection_valid(hand_points, wrist_point, elbow_point, self.config):
+                if not is_hand_detection_valid(hand_points, wrist_output, elbow_output, self.config):
                     hand_points = None
+                    hand_depths = None
 
             if hand_points is None:
-                hand_points = generate_default_hand(wrist_point, elbow_point, side, self.config)
+                hand_box = self._scale_box(box, output_scale_x, output_scale_y)
+                hand_points = generate_default_hand(wrist_output, elbow_output, side, self.config)
                 hand_points = enforce_hand_constraints(hand_points)
+                hand_depths = None
 
-            hands_by_side[side] = {"box": hand_box, "points": hand_points}
+            payload: HandPayload = {"box": hand_box, "points": hand_points}
+            if hand_depths is not None and len(hand_depths) == len(hand_points):
+                payload["depths"] = hand_depths
+                self._store_hand_depths(side, hand_depths)
+            hands_by_side[side] = payload
             self._last_hand_by_side[side] = hands_by_side[side]
-            self._last_wrist_by_side[side] = wrist_point
+            self._last_wrist_by_side[side] = wrist_output
 
         self._hand_frame_index += 1
         return hands_by_side
+
+    def _store_hand_depths(self, side, hand_depths) -> None:
+        side_label = "Left" if side == "left" else "Right"
+        wrist_depth = self.last_joint_depths.get(f"{side_label}Wrist", 0.0)
+        base_depth = float(hand_depths[0]) if hand_depths else 0.0
+        for suffix, index in HAND_NAME_TO_INDEX.items():
+            if index >= len(hand_depths):
+                continue
+            self.last_joint_depths[f"{side_label}{suffix}"] = wrist_depth + float(hand_depths[index]) - base_depth
 
     def _should_run_body_model(self) -> bool:
         return self._last_body_points is None or self._frame_index % self.config.body_detect_interval == 0
@@ -115,6 +223,7 @@ class PoseHandPipeline:
 
         offset_x = wrist_point[0] - previous_wrist[0]
         offset_y = wrist_point[1] - previous_wrist[1]
+        depths = previous_payload.get("depths")
         return (
             translate_box(previous_payload["box"], offset_x, offset_y),
             translate_points(
@@ -123,6 +232,7 @@ class PoseHandPipeline:
                 offset_y,
                 self.config.hold_confidence_decay,
             ),
+            depths,
         )
 
     def _detect_best_hand(self, frame, wrist_point, elbow_point, primary_box):
@@ -136,9 +246,11 @@ class PoseHandPipeline:
         )
 
         best_points = None
+        best_depths = None
         best_score = -1.0
         for box in candidate_boxes:
             raw_points = self.runner.detect_hand(frame, box)
+            raw_depths = getattr(self.runner, "last_hand_depths", None)
             if not has_usable_hand_detection(raw_points, self.config):
                 continue
 
@@ -152,8 +264,11 @@ class PoseHandPipeline:
             if score > best_score:
                 best_score = score
                 best_points = constrained_points
+                best_depths = raw_depths
 
-        return best_points
+        if best_points is None:
+            return None
+        return best_points, best_depths
 
     def _hand_candidate_boxes(self, wrist_point, elbow_point, frame_width, frame_height, primary_box):
         if self.config.hand_backend == "mediapipe" and not self.config.enable_backend_fallbacks:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import cv2
@@ -31,7 +32,7 @@ def build_person_payload(
     person_id: int,
     label: str,
     body_points: list[Point],
-    hands_by_side: dict[str, HandPayload],
+    hands_by_side: Mapping[str, HandPayload],
     joint_depths: dict[str, float] | None = None,
     box: tuple[int, int, int, int] | None = None,
     score: float | None = None,
@@ -44,7 +45,8 @@ def build_person_payload(
         "score": score,
         "camera_views": camera_views or [],
         "body_points": body_points,
-        "hands_by_side": hands_by_side,
+        "hands_by_side": dict(hands_by_side),
+        "joint_depths": joint_depths or {},
         "joints": build_joint_map(body_points, hands_by_side, joint_depths=joint_depths),
     }
 
@@ -67,7 +69,7 @@ def box_from_body_points(points: list[Point], threshold: float) -> tuple[int, in
 
 def fuse_smoothed_hands(
     renderer: PoseHandPipeline,
-    camera_hands: dict[str, dict[str, HandPayload]],
+    camera_hands: Mapping[str, Mapping[str, HandPayload]],
     config: PipelineConfig,
     reference_label: str,
 ) -> dict[str, HandPayload]:

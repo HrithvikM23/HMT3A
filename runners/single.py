@@ -11,7 +11,7 @@ from runtime_config import prepare_runtime_config
 from runners.common import export_motion_bundle, print_saved_paths
 from runners.multi_person import run_multi_person_assignment
 from utils.exports import build_joint_map
-from utils.fps import FpsMeter
+from utils.fps import FpsMeter, draw_fps_overlay
 from utils.smoothing import LandmarkSmoother
 
 
@@ -44,7 +44,8 @@ def run_assignment(config: PipelineConfig) -> None:
                 break
 
             body_points, hands_by_side = pipeline.detect_pose(frame)
-            joints = build_joint_map(body_points, hands_by_side)
+            joint_depths = pipeline.last_joint_depths if config.single_camera_depth_mode == "mediapipe" else None
+            joints = build_joint_map(body_points, hands_by_side, joint_depths=joint_depths)
             pipeline.render_pose(frame, body_points, hands_by_side, send_osc=False)
             osc_sender.send_pose(
                 body_points,
@@ -56,11 +57,13 @@ def run_assignment(config: PipelineConfig) -> None:
                     "profile": config.profile,
                     "body_backend": config.body_backend,
                     "hand_backend": config.hand_backend,
+                    "mediapipe_pose_model": config.mediapipe_pose_model,
                     "source": str(config.video_path),
                 },
             )
             motion_frames.append({"frame_index": frame_index, "joints": joints})
             fps_meter.tick(frame_index)
+            draw_fps_overlay(frame, fps_meter, config.fps_overlay_enabled)
             frame_index += 1
             session.write(frame)
 
@@ -82,6 +85,7 @@ def run_assignment(config: PipelineConfig) -> None:
             "profile": config.profile,
             "body_backend": config.body_backend,
             "hand_backend": config.hand_backend,
+            "mediapipe_pose_model": config.mediapipe_pose_model,
             "source": str(config.video_path),
             "body_model_variant": config.body_model_variant,
             "hand_model_variant": config.hand_model_variant,

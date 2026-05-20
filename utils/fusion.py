@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from collections.abc import Mapping
 from pathlib import Path
+
+from utils.payloads import HandPayload
 
 
 BODY_TORSO_POINTS = (5, 6, 11, 12)
@@ -180,10 +183,10 @@ def _prepare_body_sources(
 
 
 def _prepare_hand_sources(
-    camera_hands: dict[str, dict],
+    camera_hands: Mapping[str, HandPayload],
     threshold: float,
-) -> dict[str, tuple[dict, FrameReference, float]]:
-    prepared: dict[str, tuple[dict, FrameReference, float]] = {}
+) -> dict[str, tuple[HandPayload, FrameReference, float]]:
+    prepared: dict[str, tuple[HandPayload, FrameReference, float]] = {}
     for label, hand_payload in camera_hands.items():
         reference = compute_hand_reference(hand_payload, threshold)
         if reference is None:
@@ -240,7 +243,7 @@ def fuse_body_views(camera_bodies: dict[str, list[tuple[int, int, float]]], thre
     return fused_points
 
 
-def fuse_hand_views(camera_hands: dict[str, dict], threshold: float, reference_label: str = "FRONT"):
+def fuse_hand_views(camera_hands: Mapping[str, HandPayload], threshold: float, reference_label: str = "FRONT"):
     prepared_sources = _prepare_hand_sources(camera_hands, threshold)
     if not prepared_sources:
         return None
@@ -250,7 +253,7 @@ def fuse_hand_views(camera_hands: dict[str, dict], threshold: float, reference_l
     else:
         reference_hand, reference_frame, _ = reference_source
 
-    projected_by_label: dict[str, dict] = {}
+    projected_by_label: dict[str, HandPayload] = {}
     for label, (hand_payload, source_reference, _) in prepared_sources.items():
         projected_points = project_points(hand_payload["points"], source_reference, reference_frame)
         projected_box = _project_box(hand_payload["box"], source_reference, reference_frame)
@@ -341,12 +344,12 @@ def _estimate_body_joint_depths(
 
 
 def _estimate_hand_joint_depths(
-    camera_hands: dict[str, dict[str, dict]],
+    camera_hands: Mapping[str, Mapping[str, HandPayload]],
     threshold: float,
     calibrations: dict[str, dict[str, float]],
     depth_scale: float,
 ) -> dict[str, float]:
-    prepared_sources_by_side: dict[str, list[tuple[dict, FrameReference, float, float, float]]] = {
+    prepared_sources_by_side: dict[str, list[tuple[HandPayload, FrameReference, float, float, float]]] = {
         "left": [],
         "right": [],
     }
@@ -383,7 +386,7 @@ def _estimate_hand_joint_depths(
 
 def estimate_joint_depths(
     camera_bodies: dict[str, list[tuple[int, int, float]]],
-    camera_hands: dict[str, dict[str, dict]],
+    camera_hands: Mapping[str, Mapping[str, HandPayload]],
     body_threshold: float,
     hand_threshold: float,
     calibrations: dict[str, dict[str, float]],

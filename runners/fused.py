@@ -22,10 +22,11 @@ from runners.common import (
 )
 from runners.fused_alignment import align_people_across_cameras
 from utils.exports import build_joint_map, export_multi_person_fbx_bundle, export_multi_person_json
-from utils.fps import FpsMeter
+from utils.fps import FpsMeter, draw_fps_overlay
 from utils.fusion import estimate_joint_depths, fuse_body_views, load_camera_calibrations
 from utils.motion_cleanup import cleanup_multi_person_frames
 from utils.multi_person import MultiPersonTracker
+from utils.payloads import HandPayload, PersonPayload
 from utils.smoothing import LandmarkSmoother
 from utils.triangulation import (
     calibrated_backend_available,
@@ -45,6 +46,7 @@ def _build_fused_metadata(
         "profile": config.profile,
         "body_backend": config.body_backend,
         "hand_backend": config.hand_backend,
+        "mediapipe_pose_model": config.mediapipe_pose_model,
         "camera_labels": [assignment.label for assignment in assignments],
         "sources": {assignment.label: str(assignment.source) for assignment in assignments},
         "body_model_variant": config.body_model_variant,
@@ -152,6 +154,7 @@ def run_fused_assignments(
 
             frame_index += 1
             fps_meter.tick(frame_index - 1)
+            draw_fps_overlay(canvas, fps_meter, config.fps_overlay_enabled)
             writer.write(canvas)
 
             if config.enable_preview:
@@ -244,7 +247,10 @@ def _apply_multi_person_triangulation(
 
     people_observations: dict[str, list[dict[str, object]]] = {}
     for frame in triangulation_frames:
-        for person in frame.get("people", []):
+        people = frame.get("people")
+        if not isinstance(people, list):
+            continue
+        for person in people:
             if not isinstance(person, dict):
                 continue
             label = str(person["label"])
@@ -334,7 +340,7 @@ def _run_fused_multi_person_frame(
         for label, frame in frames_by_label.items()
     }
     grouped_people = align_people_across_cameras(camera_tracks, reference_label)
-    payload_people: list[dict[str, object]] = []
+    payload_people: list[PersonPayload] = []
 
     for person_index, (person_key, views) in enumerate(grouped_people.items(), start=1):
         camera_bodies = {
@@ -397,6 +403,7 @@ def _run_fused_multi_person_frame(
             "profile": config.profile,
             "body_backend": config.body_backend,
             "hand_backend": config.hand_backend,
+            "mediapipe_pose_model": config.mediapipe_pose_model,
             "camera_labels": list(frames_by_label),
         },
     )
@@ -438,7 +445,7 @@ def _run_fused_single_frame(
     frame_index: int,
 ) -> None:
     camera_bodies: dict[str, list[tuple[int, int, float]]] = {}
-    camera_hands: dict[str, dict[str, dict]] = {}
+    camera_hands: dict[str, dict[str, HandPayload]] = {}
     for label, frame in frames_by_label.items():
         body_points, hands_by_side = pipelines[label].detect_pose(frame)
         camera_bodies[label] = body_points
@@ -475,6 +482,7 @@ def _run_fused_single_frame(
             "profile": config.profile,
             "body_backend": config.body_backend,
             "hand_backend": config.hand_backend,
+            "mediapipe_pose_model": config.mediapipe_pose_model,
             "camera_labels": list(frames_by_label),
         },
     )

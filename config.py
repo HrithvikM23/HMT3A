@@ -18,6 +18,8 @@ class PipelineConfig:
     hand_backend: str = "onnx"
     enable_backend_fallbacks: bool = False
     body_model_variant: str = "yolo11x-pose.pt"
+    mediapipe_pose_model: str = "pose_landmark_full.tflite"
+    mediapipe_pose_model_path: Path | None = None
     hand_model_variant: str = "max"
     video_path: int | Path = 0
     output_path: Path | None = None
@@ -27,6 +29,7 @@ class PipelineConfig:
     hand_input_dtype: str = "float32"
     body_input_size: int = 960
     hand_input_size: int = 640
+    processing_width: int = 0
     body_conf_threshold: float = 0.30
     body_iou_threshold: float = 0.45
     hand_det_threshold: float = 0.15
@@ -56,6 +59,7 @@ class PipelineConfig:
     triangulation_smoothing_alpha: float = 0.65
     sync_offsets: dict[str, int] = field(default_factory=dict)
     fused_depth_scale: float = 1.0
+    single_camera_depth_mode: str = "flat"
     auto_performance_enabled: bool = True
     yolo_tracker: str = "botsort.yaml"
     yolo_device: str | None = None
@@ -73,6 +77,7 @@ class PipelineConfig:
     export_foot_lock_velocity: float = 8.0
     export_foot_lock_max_lift: float = 16.0
     fps_log_interval: float = 0.0
+    fps_overlay_enabled: bool = True
     enable_preview: bool = True
     provider_names: tuple[str, ...] = ("CUDAExecutionProvider",)
     preview_window_title: str = "Pose + Hand Landmarks"
@@ -108,6 +113,9 @@ class PipelineConfig:
 
         if self.hand_model_path is not None:
             self.hand_model_path = Path(self.hand_model_path)
+
+        if self.mediapipe_pose_model_path is not None:
+            self.mediapipe_pose_model_path = Path(self.mediapipe_pose_model_path)
 
         if self.output_directory is None:
             output_directory = self.project_root / "outputs"
