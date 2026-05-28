@@ -84,14 +84,18 @@ def resolve_output_path(output_path: Path | None, label: str, multi_input: bool)
     return output_path.with_name(f"{output_path.stem}_{sanitize_label(label)}{output_path.suffix or '.mp4'}")
 
 
+def select_reference_assignment(assignments: list[InputAssignment]) -> InputAssignment:
+    return assignments[0]
+
+
 def resolve_fused_output_basename(base_name: str | None, assignments: list[InputAssignment]) -> str | None:
     if base_name is not None:
         return f"{base_name.strip()}_fused"
 
-    front_assignment = next((assignment for assignment in assignments if assignment.label == "FRONT"), assignments[0])
-    if isinstance(front_assignment.source, Path):
-        return f"{front_assignment.source.stem}_fused"
-    return f"webcam_{front_assignment.source}_fused"
+    reference_assignment = select_reference_assignment(assignments)
+    if isinstance(reference_assignment.source, Path):
+        return f"{reference_assignment.source.stem}_fused"
+    return f"webcam_{reference_assignment.source}_fused"
 
 
 def resolve_fused_output_path(output_path: Path | None) -> Path | None:
@@ -365,7 +369,7 @@ def build_config_for_assignment(args: argparse.Namespace, assignment: InputAssig
 
 
 def build_fused_config(args: argparse.Namespace, assignments: list[InputAssignment]) -> PipelineConfig:
-    reference_assignment = next((assignment for assignment in assignments if assignment.label == "FRONT"), assignments[0])
+    reference_assignment = select_reference_assignment(assignments)
     return _build_pipeline_config(
         args,
         video_path=reference_assignment.source,

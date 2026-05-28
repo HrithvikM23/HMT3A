@@ -15,10 +15,10 @@ from cli import InputAssignment, build_parser, explicit_option_dests, resolve_so
 from config import PipelineConfig
 from inference.rtmpose import ONNXPoseHandRunner
 from runners.fused_alignment import align_people_across_cameras
-from runtime_config import build_config_for_assignment, prepare_model_assets
+from runtime_config import build_config_for_assignment, prepare_model_assets, select_reference_assignment
 from runtime_profiles import apply_runtime_profile
 from utils.body_geometry import derive_foot_points
-from utils.fusion import DEFAULT_CAMERA_CALIBRATIONS, fuse_body_views, load_camera_calibrations
+from utils.fusion import DEFAULT_CAMERA_CALIBRATION, fuse_body_views, load_camera_calibrations
 from utils.fps import FpsMeter, draw_fps_overlay
 from utils.normalize import build_hand_box
 from utils.color_profile import color_profile_similarity
@@ -52,7 +52,7 @@ class CoreLogicTests(unittest.TestCase):
     def test_cli_defaults_build_config(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["--source", "0", "--no-preview"])
-        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.video_path, 0)
         self.assertEqual(config.provider_names, ("CUDAExecutionProvider",))
@@ -69,7 +69,7 @@ class CoreLogicTests(unittest.TestCase):
             "--hand-crop-retries", "1",
             "--fps-log-interval", "0.5",
         ])
-        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.body_detect_interval, 2)
         self.assertEqual(config.hand_detect_interval, 3)
@@ -82,14 +82,14 @@ class CoreLogicTests(unittest.TestCase):
             "--source", "0",
             "--single-camera-depth", "mediapipe",
         ])
-        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.single_camera_depth_mode, "mediapipe")
 
     def test_cli_processing_width_build_config(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["--source", "0", "--processing-width", "480"])
-        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.processing_width, 480)
 
@@ -103,7 +103,7 @@ class CoreLogicTests(unittest.TestCase):
         explicit = explicit_option_dests(parser, argv)
         args = parser.parse_args(argv)
         apply_runtime_profile(args, explicit)
-        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.profile, "fastest")
         self.assertEqual(config.body_model_variant, "yolo11n-pose.pt")
@@ -119,7 +119,7 @@ class CoreLogicTests(unittest.TestCase):
         argv = ["--source", "0", "--profile", "fastest"]
         args = parser.parse_args(argv)
         apply_runtime_profile(args, explicit_option_dests(parser, argv))
-        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.processing_width, 640)
         self.assertEqual(config.body_detect_interval, 1)
@@ -131,7 +131,7 @@ class CoreLogicTests(unittest.TestCase):
     def test_cli_landmark_backend_build_config(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["--source", "0", "--landmark-backend", "mediapipe"])
-        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.body_backend, "mediapipe")
         self.assertEqual(config.hand_backend, "mediapipe")
@@ -142,7 +142,7 @@ class CoreLogicTests(unittest.TestCase):
         argv = ["--source", "0", "--landmark-backend", "mediapipe"]
         args = parser.parse_args(argv)
         apply_runtime_profile(args, explicit_option_dests(parser, argv))
-        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.body_backend, "mediapipe")
         self.assertIsNone(config.body_model_path)
@@ -156,7 +156,7 @@ class CoreLogicTests(unittest.TestCase):
             "--landmark-backend", "mediapipe",
             "--model", "pose_landmark_heavy.tflite",
         ])
-        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.body_backend, "mediapipe")
         self.assertIsNone(config.body_model_path)
@@ -170,7 +170,7 @@ class CoreLogicTests(unittest.TestCase):
             "--body-backend", "yolo",
             "--hand-backend", "mediapipe",
         ])
-        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.body_backend, "yolo")
         self.assertEqual(config.hand_backend, "mediapipe")
@@ -179,7 +179,7 @@ class CoreLogicTests(unittest.TestCase):
     def test_hybrid_shortcut_enables_backend_fallbacks(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["--source", "0", "--landmark-backend", "hybrid"])
-        config = build_config_for_assignment(args, InputAssignment("FRONT", 0), False)
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.body_backend, "mediapipe")
         self.assertEqual(config.hand_backend, "mediapipe")
@@ -316,18 +316,18 @@ class CoreLogicTests(unittest.TestCase):
             calibration_path.write_text("", encoding="utf-8")
             parser = build_parser()
             args = parser.parse_args([
-                "--source", "FRONT=0",
-                "--source", "LEFT=1",
+                "--source", "CAM_0=0",
+                "--source", "CAM_1=1",
                 "--triangulate-3d",
                 "--calibration-3d", str(calibration_path),
                 "--triangulation-min-cameras", "2",
                 "--triangulation-use-outlier-rejection",
                 "--triangulation-max-error", "5.0",
                 "--triangulation-smoothing-alpha", "0.25",
-                "--sync-offset", "FRONT=0",
-                "--sync-offset", "LEFT=3",
+                "--sync-offset", "CAM_0=0",
+                "--sync-offset", "CAM_1=3",
             ])
-            config = build_config_for_assignment(args, InputAssignment("FRONT", 0), True)
+            config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), True)
 
         self.assertTrue(config.enable_3d_triangulation)
         self.assertEqual(config.calibration_3d_path, calibration_path)
@@ -335,7 +335,12 @@ class CoreLogicTests(unittest.TestCase):
         self.assertTrue(config.triangulation_use_outlier_rejection)
         self.assertEqual(config.triangulation_max_error, 5.0)
         self.assertEqual(config.triangulation_smoothing_alpha, 0.25)
-        self.assertEqual(config.sync_offsets, {"FRONT": 0, "LEFT": 3})
+        self.assertEqual(config.sync_offsets, {"CAM_0": 0, "CAM_1": 3})
+
+    def test_reference_assignment_uses_first_source(self) -> None:
+        assignments = [InputAssignment("CAM_1", 1), InputAssignment("CAM_0", 0)]
+
+        self.assertIs(select_reference_assignment(assignments), assignments[0])
 
     def test_pipeline_config_run_index_avoids_existing_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -455,12 +460,12 @@ class CoreLogicTests(unittest.TestCase):
         )
 
         grouped = align_people_across_cameras(
-            {"FRONT": [front, front_unlabeled], "LEFT": [left_unlabeled, left_labeled]},
-            "FRONT",
+            {"CAM_0": [front, front_unlabeled], "CAM_1": [left_unlabeled, left_labeled]},
+            "CAM_0",
         )
 
-        self.assertIs(grouped["person1"]["LEFT"], left_labeled)
-        self.assertIs(grouped["person2"]["LEFT"], left_unlabeled)
+        self.assertIs(grouped["person1"]["CAM_1"], left_labeled)
+        self.assertIs(grouped["person2"]["CAM_1"], left_unlabeled)
 
     def test_build_hand_box_is_clamped_to_frame(self) -> None:
         box = build_hand_box(
@@ -500,18 +505,18 @@ class CoreLogicTests(unittest.TestCase):
     def test_load_camera_calibrations_merges_uppercase_labels(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "calibration.json"
-            path.write_text(json.dumps({"left": {"depth_scale": 2.5}}), encoding="utf-8")
+            path.write_text(json.dumps({"cam_1": {"depth_scale": 2.5}}), encoding="utf-8")
 
             calibrations = load_camera_calibrations(path)
 
-        self.assertEqual(calibrations["LEFT"]["depth_scale"], 2.5)
-        self.assertEqual(calibrations["LEFT"]["depth_sign"], DEFAULT_CAMERA_CALIBRATIONS["LEFT"]["depth_sign"])
+        self.assertEqual(calibrations["CAM_1"]["depth_scale"], 2.5)
+        self.assertEqual(calibrations["CAM_1"]["depth_sign"], DEFAULT_CAMERA_CALIBRATION["depth_sign"])
 
     def test_fuse_body_views_keeps_reference_shape(self) -> None:
         front = _body_points()
         left = [(x + 10, y, conf) for x, y, conf in front]
 
-        fused = fuse_body_views({"FRONT": front, "LEFT": left}, threshold=0.1)
+        fused = fuse_body_views({"CAM_0": front, "CAM_1": left}, threshold=0.1)
 
         self.assertIsNotNone(fused)
         assert fused is not None
@@ -523,7 +528,7 @@ class CoreLogicTests(unittest.TestCase):
 
         class FakeCameraGroup:
             def get_names(self):
-                return ["FRONT", "LEFT"]
+                return ["CAM_0", "CAM_1"]
 
             def triangulate(self, points, progress=False, minimum_cameras_for_triangulation=2):
                 self.received_points = points
@@ -546,8 +551,8 @@ class CoreLogicTests(unittest.TestCase):
                 Path("calibration.toml"),
                 [{
                     "camera_bodies": {
-                        "FRONT": _body_points(),
-                        "LEFT": [(x + 10, y, conf) for x, y, conf in _body_points()],
+                        "CAM_0": _body_points(),
+                        "CAM_1": [(x + 10, y, conf) for x, y, conf in _body_points()],
                     },
                     "camera_hands": {},
                 }],

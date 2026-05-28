@@ -54,7 +54,7 @@ def run_multi_person_assignment(config: PipelineConfig) -> None:
                         body_points=track.body_points,
                         hands_by_side=track.hands_by_side,
                         joint_depths=joint_depths,
-                        camera_views=["FRONT"],
+                        camera_views=["CAM_0"],
                     )
                 )
 

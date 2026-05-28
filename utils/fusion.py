@@ -65,18 +65,10 @@ HAND_JOINT_NAME_TO_INDEX = {
     "RightPinky3": ("right", 19),
     "RightPinky4": ("right", 20),
 }
-CAMERA_VIEW_WEIGHTS = {
-    "FRONT": 1.20,
-    "BACK": 1.00,
-    "LEFT": 1.05,
-    "RIGHT": 1.05,
-}
-DEFAULT_CAMERA_CALIBRATIONS = {
-    "FRONT": {"depth_sign": 0.0, "depth_scale": 0.0},
-    "BACK": {"depth_sign": 0.0, "depth_scale": 0.0},
-    "LEFT": {"depth_sign": -1.0, "depth_scale": 1.0},
-    "RIGHT": {"depth_sign": 1.0, "depth_scale": 1.0},
-}
+DEFAULT_CAMERA_WEIGHT = 1.0
+DEFAULT_CAMERA_CALIBRATION = {"depth_sign": 0.0, "depth_scale": 0.0}
+CAMERA_VIEW_WEIGHTS: dict[str, float] = {}
+DEFAULT_CAMERA_CALIBRATIONS: dict[str, dict[str, float]] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +79,7 @@ class FrameReference:
 
 
 def load_camera_calibrations(path: Path | None) -> dict[str, dict[str, float]]:
-    calibrations = {label: dict(values) for label, values in DEFAULT_CAMERA_CALIBRATIONS.items()}
+    calibrations: dict[str, dict[str, float]] = {}
     if path is None:
         return calibrations
 
@@ -98,7 +90,7 @@ def load_camera_calibrations(path: Path | None) -> dict[str, dict[str, float]]:
     for label, values in payload.items():
         if not isinstance(label, str) or not isinstance(values, dict):
             continue
-        target = calibrations.setdefault(label.upper(), {})
+        target = calibrations.setdefault(label.upper(), dict(DEFAULT_CAMERA_CALIBRATION))
         for key in ("depth_sign", "depth_scale"):
             if key in values:
                 target[key] = float(values[key])
@@ -178,7 +170,7 @@ def _prepare_body_sources(
         reference = compute_body_reference(points, threshold)
         if reference is None:
             continue
-        prepared[label] = (points, reference, CAMERA_VIEW_WEIGHTS.get(label, 1.0))
+        prepared[label] = (points, reference, CAMERA_VIEW_WEIGHTS.get(label.upper(), DEFAULT_CAMERA_WEIGHT))
     return prepared
 
 
@@ -191,11 +183,11 @@ def _prepare_hand_sources(
         reference = compute_hand_reference(hand_payload, threshold)
         if reference is None:
             continue
-        prepared[label] = (hand_payload, reference, CAMERA_VIEW_WEIGHTS.get(label, 1.0))
+        prepared[label] = (hand_payload, reference, CAMERA_VIEW_WEIGHTS.get(label.upper(), DEFAULT_CAMERA_WEIGHT))
     return prepared
 
 
-def fuse_body_views(camera_bodies: dict[str, list[tuple[int, int, float]]], threshold: float, reference_label: str = "FRONT"):
+def fuse_body_views(camera_bodies: dict[str, list[tuple[int, int, float]]], threshold: float, reference_label: str = "CAM_0"):
     prepared_sources = _prepare_body_sources(camera_bodies, threshold)
     if not prepared_sources:
         return None
@@ -243,7 +235,7 @@ def fuse_body_views(camera_bodies: dict[str, list[tuple[int, int, float]]], thre
     return fused_points
 
 
-def fuse_hand_views(camera_hands: Mapping[str, HandPayload], threshold: float, reference_label: str = "FRONT"):
+def fuse_hand_views(camera_hands: Mapping[str, HandPayload], threshold: float, reference_label: str = "CAM_0"):
     prepared_sources = _prepare_hand_sources(camera_hands, threshold)
     if not prepared_sources:
         return None
@@ -310,7 +302,7 @@ def _estimate_body_joint_depths(
 ) -> dict[str, float]:
     prepared_sources: list[tuple[list[tuple[int, int, float]], FrameReference, float, float, float]] = []
     for label, points in camera_bodies.items():
-        calibration = calibrations.get(label.upper(), DEFAULT_CAMERA_CALIBRATIONS.get(label.upper(), {}))
+        calibration = calibrations.get(label.upper(), DEFAULT_CAMERA_CALIBRATION)
         depth_sign = float(calibration.get("depth_sign", 0.0))
         if depth_sign == 0.0:
             continue
@@ -323,7 +315,7 @@ def _estimate_body_joint_depths(
                 reference,
                 depth_sign,
                 float(calibration.get("depth_scale", 1.0)),
-                CAMERA_VIEW_WEIGHTS.get(label, 1.0),
+                CAMERA_VIEW_WEIGHTS.get(label.upper(), DEFAULT_CAMERA_WEIGHT),
             )
         )
 
@@ -354,12 +346,12 @@ def _estimate_hand_joint_depths(
         "right": [],
     }
     for label, hands_by_side in camera_hands.items():
-        calibration = calibrations.get(label.upper(), DEFAULT_CAMERA_CALIBRATIONS.get(label.upper(), {}))
+        calibration = calibrations.get(label.upper(), DEFAULT_CAMERA_CALIBRATION)
         depth_sign = float(calibration.get("depth_sign", 0.0))
         if depth_sign == 0.0:
             continue
         depth_view_scale = float(calibration.get("depth_scale", 1.0))
-        view_weight = CAMERA_VIEW_WEIGHTS.get(label, 1.0)
+        view_weight = CAMERA_VIEW_WEIGHTS.get(label.upper(), DEFAULT_CAMERA_WEIGHT)
         for side, hand_payload in hands_by_side.items():
             reference = compute_hand_reference(hand_payload, threshold)
             if reference is None:

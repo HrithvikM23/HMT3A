@@ -10,14 +10,6 @@ from mediapipe_models import mediapipe_pose_model_names
 from runtime_profiles import PROFILE_NAMES, PROFILE_QUALITY
 
 
-CAMERA_POSITION_OPTIONS = {
-    "1": "BACK",
-    "2": "LEFT",
-    "3": "RIGHT",
-}
-DEFAULT_MULTI_SOURCE_LABELS = ("FRONT", "BACK", "LEFT", "RIGHT")
-
-
 @dataclass(frozen=True, slots=True)
 class InputAssignment:
     label: str
@@ -101,23 +93,9 @@ def choose_camera_assignments_gui() -> list[InputAssignment]:
     camera_count = int(count_raw) if count_raw.isdigit() else 1
     camera_count = max(1, min(4, camera_count))
 
-    labels = ["FRONT"]
-    available_positions = dict(CAMERA_POSITION_OPTIONS)
-
-    while len(labels) < camera_count and available_positions:
-        print("Assign the next camera position:")
-        for option, name in available_positions.items():
-            print(f"  {option}. {name}")
-        selection = input("Choose position [1/2/3]: ").strip()
-        selected_label = available_positions.get(selection)
-        if selected_label is None:
-            print("Invalid selection. Please choose 1, 2, or 3.")
-            continue
-        labels.append(selected_label)
-        del available_positions[selection]
-
     assignments: list[InputAssignment] = []
-    for label in labels:
+    for camera_index in range(camera_count):
+        label = default_camera_label(camera_index)
         path = choose_video_gui(f"Select Video File for {label}")
         if not path:
             print(f"No file selected for {label}.")
@@ -167,7 +145,7 @@ def resolve_sources(args: argparse.Namespace) -> list[InputAssignment]:
 
     if choice == "1":
         idx = input("Webcam index: ").strip()
-        return [InputAssignment(label="FRONT", source=int(idx) if idx.isdigit() else 0)]
+        return [InputAssignment(label=default_camera_label(0), source=int(idx) if idx.isdigit() else 0)]
 
     if choice == "2":
         return choose_camera_assignments_gui()
