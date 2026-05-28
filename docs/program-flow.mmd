@@ -1,0 +1,72 @@
+flowchart TD
+    A["Start program<br/>main.py"] --> B["Parse command-line arguments"]
+    B --> C["Apply runtime profile"]
+    C --> D["Check and prepare runtime dependencies"]
+    D --> E["Resolve input sources"]
+
+    E --> F{"Input found?"}
+    F -->|No| Z["Exit"]
+    F -->|Yes| G{"Calibration mode?"}
+
+    G -->|Yes| H["Calibrate cameras"]
+    H --> I["Save calibration file"]
+    I --> Z
+
+    G -->|No| J{"How many sources?"}
+
+    J -->|One source| K["Build pipeline config"]
+    K --> L{"Multi-person enabled?"}
+
+    L -->|No| M["Single-person pipeline"]
+    M --> N["Open video or webcam"]
+    N --> O["Read frame"]
+    O --> P{"Frame available?"}
+    P -->|No| Q["Export JSON and FBX"]
+    P -->|Yes| R["Detect body landmarks"]
+    R --> S["Smooth body points"]
+    S --> T["Detect left and right hands"]
+    T --> U["Validate or generate fallback hands"]
+    U --> V["Build skeleton joint map"]
+    V --> W["Render pose overlay"]
+    W --> X["Send UDP packet if enabled"]
+    X --> Y["Save motion frame"]
+    Y --> O
+    Q --> Z
+
+    L -->|Yes| AA["Multi-person pipeline"]
+    AA --> AB["Open video or webcam"]
+    AB --> AC["Read frame"]
+    AC --> AD{"Frame available?"}
+    AD -->|No| AE["Export multi-person JSON and FBX"]
+    AD -->|Yes| AF["Detect all people"]
+    AF --> AG["Track people across frames"]
+    AG --> AH["Detect hands for each person"]
+    AH --> AI["Build joint map for each person"]
+    AI --> AJ["Render all people"]
+    AJ --> AK["Send multi-person UDP if enabled"]
+    AK --> AL["Save multi-person frame"]
+    AL --> AC
+    AE --> Z
+
+    J -->|Multiple sources| BA["Multi-camera fusion pipeline"]
+    BA --> BB["Open all camera or video sources"]
+    BB --> BC["Read synchronized frames"]
+    BC --> BD{"Frames available?"}
+    BD -->|No| BE["Export fused JSON and FBX"]
+    BD -->|Yes| BF["Detect body and hands in each camera"]
+    BF --> BG["Match people across cameras"]
+    BG --> BH["Fuse body and hand landmarks"]
+    BH --> BI["Estimate depth or triangulate 3D"]
+    BI --> BJ["Build fused skeleton"]
+    BJ --> BK["Render fused output"]
+    BK --> BL["Send fused UDP if enabled"]
+    BL --> BM["Save fused motion frame"]
+    BM --> BC
+    BE --> Z
+
+    classDef default font-size:18px,stroke-width:2px;
+    classDef decision font-size:18px,stroke-width:2px,fill:#fff3cd,stroke:#b7791f;
+    classDef terminal font-size:18px,stroke-width:2px,fill:#e6fffa,stroke:#2c7a7b;
+
+    class F,G,J,L,P,AD,BD decision;
+    class Z,Q,AE,BE terminal;

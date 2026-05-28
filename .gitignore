@@ -1,23 +1,63 @@
-# ---------- Outputs ----------
-**/outputs/
-*.mp4
-*.json
+# ----------------------
+# Python cache / builds
+# ----------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.pyc
 
-# ---------- Virtual environments ----------
+# Virtual environment
 venv/
 .env/
+.envrc
+.vendor_py*/
+.ultralytics/
+.venv/
 
-# ---------- Tool caches ----------
-.mypy_cache/
-.pytest_cache/
-.ruff_cache/
-**/__pycache__/
-*.py[cod]
-*.pyc.*
+# ----------------------
+# Logs & runtime outputs
+# ----------------------
+logs/
+outputs/
+.tmp_test_runtime/
+.tmp_smoke/
+tmp_test/
+*.log
+*.mp4
+*.avi
+*.jpg
 
- # ---------- Models ---------- 
-*.pt
+# ----------------------
+# Model weights (VERY IMPORTANT)
+# ----------------------
 *.pth
-*.task 
-*/models/*
+*.pt
 *.onnx
+*.tflite
+*.binarypb
+
+# ----------------------
+# OS / Editor junk
+# ----------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ----------------------
+# Jupyter (if used)
+# ----------------------
+.ipynb_checkpoints/
+
+# ----------------------
+# Temporary files
+# ----------------------
+*.tmp
+*.cache
+
+# ----------------------
+# CUDA / Torch artifacts (optional)
+# ----------------------
+*.cuda
