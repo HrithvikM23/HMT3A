@@ -55,9 +55,10 @@ Then `resolve_sources()` transforms the raw input into a list of `InputAssignmen
 
 Examples:
 
-- `--source 0` becomes `[InputAssignment(label="FRONT", source=0)]`
-- `--source video.mp4` becomes `[InputAssignment(label="FRONT", source=Path("video.mp4"))]`
-- `--source FRONT=front.mp4 --source LEFT=left.mp4` becomes two labeled assignments
+- `--source 0` becomes `[InputAssignment(label="CAM_0", source=0)]`
+- `--source video.mp4` becomes `[InputAssignment(label="CAM_0", source=Path("video.mp4"))]`
+- `--source cam0.mp4 --source cam1.mp4` becomes `CAM_0` and `CAM_1` assignments
+- `--source CAM_0=cam0.mp4 --source CAM_1=cam1.mp4` becomes two explicitly labeled assignments
 
 ### Why labels matter
 
@@ -67,6 +68,8 @@ Labels are not just cosmetic. They are used by:
 - output naming
 - camera-group metadata
 - reference-view selection
+
+Labels identify streams; they should not be treated as physical placement. Physical geometry comes from calibration and synchronization data.
 
 ## 4. Config Construction
 

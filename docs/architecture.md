@@ -125,15 +125,17 @@ Without this step, Kinara would frequently fall back to CPU even on machines tha
 
 `resolve_sources()` converts raw CLI input into `InputAssignment` objects. Each assignment has:
 
-- `label`: logical camera label such as `FRONT` or `LEFT`
+- `label`: camera label such as `CAM_0` or `CAM_1`
 - `source`: webcam index or file path
 
 It supports:
 
 - a single webcam: `--source 0`
 - a single video: `--source path.mp4`
-- labeled multi-camera input: `--source FRONT=front.mp4 --source LEFT=left.mp4`
+- labeled multi-camera input: `--source CAM_0=cam0.mp4 --source CAM_1=cam1.mp4`
 - interactive prompt mode when `--source` is omitted
+
+Unlabeled repeated sources are auto-labeled in input order as `CAM_0`, `CAM_1`, and so on. Geometry should come from calibration/sync data rather than names like front or left.
 
 ### Configuration construction
 
@@ -443,14 +445,15 @@ Fused mode is the most orchestration-heavy path in the repo.
 
 One camera is treated as the reference output view:
 
-- `FRONT` if present
-- otherwise the first provided camera label
+- the first provided camera label, usually `CAM_0`
 
 The reference view matters because:
 
 - the rendered fused canvas is based on that frame
 - projected points are expressed in that view's coordinate frame before export normalization
 - grouped people are aligned against tracks seen in that view
+
+The intended direction is to make reference selection confidence/calibration-driven after camera health and calibration metadata are available.
 
 ### Single-person fused mode
 
@@ -481,7 +484,7 @@ For each camera:
 
 ### Calibration role
 
-`utils.fusion.load_camera_calibrations()` accepts lightweight calibration JSON. That path is a practical pseudo-depth system that uses view orientation and relative lateral displacement to estimate depth-like values good enough for export and retarget experimentation.
+`utils.fusion.load_camera_calibrations()` accepts lightweight calibration JSON keyed by source labels such as `CAM_0` and `CAM_1`. That path is a practical pseudo-depth system that uses configured camera orientation and relative lateral displacement to estimate depth-like values good enough for export and retarget experimentation. Cameras without calibration data use neutral depth settings.
 
 For fused runs, Kinara can also load a calibrated camera TOML with `--triangulate-3d --calibration-3d`. In that mode, Kinara keeps its YOLO body and ONNX hand detections, stores matched per-camera 2D landmarks for the run, triangulates them after the frame loop, and replaces heuristic fused joint coordinates with calibrated 3D coordinates where reconstruction succeeds.
 

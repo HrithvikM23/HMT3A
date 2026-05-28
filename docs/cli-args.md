@@ -204,8 +204,8 @@ Default: `0.90`
 
 `--camera-calibration`  
 Function: Loads an optional JSON file with per-camera fusion calibration overrides.  
-Accepted values: path to a JSON object keyed by camera label such as `FRONT`, `LEFT`, `RIGHT`, `BACK`.  
-Notes: Supported numeric fields are currently `depth_sign` and `depth_scale`.
+Accepted values: path to a JSON object keyed by source label such as `CAM_0`, `CAM_1`, or another explicit label used in `--source`.  
+Notes: Supported numeric fields are currently `depth_sign` and `depth_scale`. Cameras without JSON entries use neutral depth settings.
 
 `--calibration-3d`  
 Function: Loads a calibrated camera TOML for real multi-view 3D triangulation.  

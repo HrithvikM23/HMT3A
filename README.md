@@ -245,16 +245,18 @@ Multi-camera plus multi-person can now run together through the fused multi-pers
 
 # Multi-Camera Support
 
-Multi-camera mode currently supports:
+Multi-camera mode is based on generic camera labels:
 
 ```txt
-- FRONT
-- BACK
-- LEFT
-- RIGHT
+- CAM_0
+- CAM_1
+- CAM_2
+- CAM_3
 ```
 
-The current fusion path now supports view-aware depth estimation with optional per-camera calibration overrides from JSON.
+Repeated unlabeled `--source` values are assigned `CAM_0`, `CAM_1`, and so on. You may still provide explicit labels, but the recommended path is to keep camera names generic and let calibration/sync data describe where each camera is in the rig.
+
+The current fusion path supports lightweight per-camera depth overrides from JSON and calibrated 3D reconstruction from a TOML file whose camera names match the source labels. Without calibration data, generic cameras use neutral depth settings.
 
 ---
 
@@ -334,16 +336,12 @@ You can also use the package entrypoint:
 python -m kinara
 ```
 
-Program flow:
+Recommended multi-camera CLI flow:
 
 ```txt
-Select input source
-1 -> Webcam
-2 -> Video file(s)
-If video mode:
-  Enter number of cameras
-  Assign FRONT/BACK/LEFT/RIGHT roles
-  Pick one video per assigned role
+Pass one --source per camera
+Unlabeled sources become CAM_0, CAM_1, ...
+Use matching camera names in calibration/sync files
 Pipeline starts
 ```
 
@@ -521,7 +519,7 @@ Keep the current UDP live-motion path and add an Unreal-side receiver/parser wor
 
 ## Android Multi-Phone Capture
 
-Add an Android client flow where up to four phones can stream camera video over LAN/WLAN to a PC receiver. The planned backend path includes port-based client listening, camera-role assignment such as FRONT/BACK/LEFT/RIGHT/UP, a connection handshake/health-check before capture begins, bounded buffering between ingest and inference, and confidence-based multi-camera fusion for final output generation.
+Add an Android client flow where up to four phones can stream camera video over LAN/WLAN to a PC receiver. The planned backend path includes port-based client listening, generic camera IDs such as `CAM_0` and `CAM_1`, a connection handshake/health-check before capture begins, bounded buffering between ingest and inference, calibration/sync status tracking, and confidence-based multi-camera fusion for final output generation.
 
 ---
 

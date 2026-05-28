@@ -22,11 +22,11 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 
 ## `cli.py`
 
-- `InputAssignment`: Immutable mapping of a logical camera label such as `FRONT` or `LEFT` to either a webcam index or a file path.
+- `InputAssignment`: Immutable mapping of a camera label such as `CAM_0` or `CAM_1` to either a webcam index or a file path.
 - `parse_color`: Parses `B,G,R` CLI strings into OpenCV color tuples.
 - `parse_identity_hint`: Parses `--identity person1=black,orange` into a normalized label and tuple of hint colors.
 - `choose_video_gui`: Opens the Tk file picker used by interactive video selection.
-- `choose_camera_assignments_gui`: Interactive helper that asks for camera count and assigns files to logical view labels.
+- `choose_camera_assignments_gui`: Interactive helper that asks for camera count and assigns files to `CAM_N` camera labels.
 - `resolve_sources`: Converts CLI or interactive input into a list of `InputAssignment` objects.
 - `build_parser`: Declares the CLI surface.
 
@@ -36,6 +36,7 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 - `validate_config`: Performs runtime sanity checks on the resolved `PipelineConfig`.
 - `prepare_runtime_config`: Calls `prepare_model_assets` and `validate_config`; used at the start of each runtime mode.
 - `build_config_for_assignment`: Creates the config for a single labeled assignment.
+- `select_reference_assignment`: Selects the first camera assignment as the fused reference stream.
 - `build_fused_config`: Creates the config for a fused multi-camera session.
 
 ## `runtime_profiles.py`
