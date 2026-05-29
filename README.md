@@ -232,6 +232,8 @@ It uses:
 - wrist ownership checks to reduce hand stealing during crossings
 ```
 
+For speed-first runs, MediaPipe can enter the same multi-person runner/export path, but MediaPipe Pose only returns one body per frame. Use YOLO when you need true multiple-person detection in one camera view.
+
 Example identity hints:
 
 ```bash

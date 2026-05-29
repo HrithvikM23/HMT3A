@@ -5,8 +5,8 @@
 `--profile`  
 Function: Selects the app-facing runtime mode.  
 Accepted values: `fastest`, `mid`, `quality`.  
-Default: `quality`  
-Notes: `fastest` uses the light body model, FP16 body inference on CUDA when available, a 640px processing frame, and reduced hand cadence without skipping body detection. `mid` balances speed and stability. `quality` keeps the heaviest defaults for offline renders. Any explicit argument you pass with a profile overrides that profile value.
+Default: `fastest`  
+Notes: `fastest` uses the light body model, FP16 body inference on CUDA when available, a 640px processing frame, and reduced hand cadence. `mid` balances speed and stability. `quality` keeps the heaviest defaults for offline renders. Any explicit argument you pass with a profile overrides that profile value.
 
 `--calibrate-cameras`  
 Function: Creates a calibrated camera TOML from synchronized Charuco calibration videos.  
@@ -62,7 +62,7 @@ Recommended board: 7 x 5 Charuco squares, 35 mm square size, 28 mm marker size. 
 `--model`  
 Function: Selects the body model for the active landmark backend. With YOLO it selects the Ultralytics pose weights. With MediaPipe it selects the MediaPipe pose landmark TFLite asset.  
 Accepted values: YOLO filenames like `yolo11x-pose.pt`, `yolo11l-pose.pt`, `yolo11m-pose.pt`, `yolo11s-pose.pt`, `yolo11n-pose.pt`, a custom local YOLO path, or MediaPipe pose names `pose_landmark_lite.tflite`, `pose_landmark_full.tflite`, `pose_landmark_heavy.tflite`.  
-Default: `yolo11x-pose.pt` for YOLO mode, `pose_landmark_full.tflite` for MediaPipe mode.  
+Default: `yolo11n-pose.pt` in the default `fastest` profile for YOLO mode, `pose_landmark_full.tflite` for MediaPipe mode. `--profile quality` uses `yolo11x-pose.pt` unless you pass an explicit `--model`.  
 Notes: Known YOLO models are stored in `models/body/`. MediaPipe pose TFLite assets are also staged in `models/body/`; MediaPipe hand TFLite assets are staged in `models/hand/mediapipe/` when that backend is used. MediaPipe may still need a runtime compatibility copy inside its Python package, but Kinara keeps the managed copy in `models/`.
 
 `--landmark-backend`  
@@ -76,6 +76,7 @@ Function: Selects the body landmark backend.
 Accepted values: `yolo`, `mediapipe`.  
 Default: resolved from `--landmark-backend`; `mediapipe` unless you select `--landmark-backend yolo`.  
 Notes: `yolo` supports multi-person tracking. `mediapipe` can provide richer single-person foot landmarks.
+MediaPipe can run through the multi-person runner/export path, but MediaPipe Pose only returns one body per frame; choose YOLO for true multi-person detection.
 
 `--hand-backend`  
 Function: Selects the hand landmark backend.  
@@ -109,12 +110,27 @@ Default: `images`
 `--body-input-size`  
 Function: Sets the YOLO body model image size.  
 Accepted range: integer `> 0`.  
-Default: `960`
+Default: `640`
 
 `--yolo-half`  
 Function: Requests FP16 body inference on supported CUDA GPUs.  
 Accepted values: flag only.  
 Default: disabled in `quality`, enabled by `fastest` and `mid`.
+
+`--no-yolo-fuse`  
+Function: Disables YOLO Conv+BatchNorm fusion at model startup.  
+Accepted values: flag only.  
+Default: fusion enabled.
+
+`--no-yolo-warmup`  
+Function: Disables the one-time YOLO warmup pass.  
+Accepted values: flag only.  
+Default: warmup enabled.
+
+`--no-yolo-person-class-filter`  
+Function: Disables class filtering during YOLO pose inference.  
+Accepted values: flag only.  
+Default: class filtering enabled; Kinara asks YOLO for class `0`, the person class used by pose models.
 
 `--hand-input-size`  
 Function: Sets the square resize dimension for the hand crop input.  
@@ -267,7 +283,7 @@ Notes: `flat` keeps single-camera output on a stable Z plane. This avoids fake-d
 `--yolo-tracker`  
 Function: Sets the Ultralytics tracker config used for multi-person tracking.  
 Accepted values: tracker config names like `botsort.yaml` or `bytetrack.yaml`.  
-Default: `botsort.yaml`
+Default: `bytetrack.yaml`
 
 `--yolo-device`  
 Function: Overrides the Ultralytics device selection.  

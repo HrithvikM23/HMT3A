@@ -254,6 +254,8 @@ Blender needs a stable rest rig. If the importer had to guess the rig from whate
 
 Single-camera multi-person mode replaces “one pipeline instance” with “one tracker that owns many pipeline instances”.
 
+With YOLO body detection, this can detect and track multiple people in one frame. With MediaPipe body detection, the same runner/export path is available for speed, but MediaPipe Pose contributes only one body per frame.
+
 ## Setup phase
 
 `run_multi_person_assignment()` creates:

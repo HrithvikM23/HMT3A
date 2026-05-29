@@ -124,7 +124,7 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 - `ONNXPoseHandRunner.__init__`: Loads only the configured YOLO, ONNX, and MediaPipe runners needed by the resolved config.
 - `ONNXPoseHandRunner.detect_body`: Convenience wrapper that returns the top detected body or an all-zero fallback; MediaPipe mode also records relative depth that can be exported when single-camera MediaPipe depth is enabled.
 - `ONNXPoseHandRunner._to_numpy`: Converts PyTorch-like or NumPy-like tensor outputs into concrete NumPy arrays.
-- `ONNXPoseHandRunner.detect_bodies`: Runs YOLO prediction or tracker mode, converts model outputs into `BodyDetection` records, sorts by confidence, and caps the result count.
+- `ONNXPoseHandRunner.detect_bodies`: Runs YOLO prediction/tracker mode, or returns the single available MediaPipe body as a `BodyDetection` record for fast MediaPipe-backed runner/export paths.
 - `ONNXPoseHandRunner.detect_hand`: Crops the hand region, runs the configured hand backend, converts detections into 21 image-space points, and records MediaPipe hand depth when available.
 
 ## `pipeline/pipeline.py`
