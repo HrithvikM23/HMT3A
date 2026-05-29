@@ -115,9 +115,6 @@ def validate_config(config: PipelineConfig) -> bool:
         accepted = ", ".join(mediapipe_pose_model_names())
         print(f"Error: invalid MediaPipe pose model: {config.mediapipe_pose_model}. Accepted values: {accepted}")
         return False
-    if config.body_backend == "mediapipe" and config.max_people > 1:
-        print("Error: MediaPipe body backend currently supports one person. Use --body-backend yolo for multi-person.")
-        return False
     missing_paths = [
         path for path in (config.hand_model_path, config.mediapipe_pose_model_path)
         if path is not None and not Path(path).exists()
@@ -340,6 +337,9 @@ def _build_pipeline_config(
         yolo_tracker=args.yolo_tracker,
         yolo_device=args.yolo_device,
         yolo_half=args.yolo_half,
+        yolo_fuse=not args.no_yolo_fuse,
+        yolo_warmup=not args.no_yolo_warmup,
+        yolo_person_class_filter=not args.no_yolo_person_class_filter,
         body_detect_interval=args.body_detect_interval,
         hand_detect_interval=args.hand_detect_interval,
         hand_crop_retries=args.hand_crop_retries,

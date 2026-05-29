@@ -116,11 +116,65 @@ class ONNXPoseHandRunner:
             )
         device_name = "" if config.yolo_device is None else str(config.yolo_device).lower()
         self._use_yolo_half = bool(config.yolo_half and device_name != "cpu" and _cuda_available())
+        if self._uses_yolo_body:
+            self._configure_yolo_runtime()
         self._mp_pose = None
         self._mp_hands = None
         self._mp_available = False
         if self._uses_mediapipe:
             self._setup_mediapipe()
+
+    def _configure_yolo_runtime(self) -> None:
+        try:
+            import torch
+            torch.backends.cudnn.benchmark = True
+            if hasattr(torch, "set_float32_matmul_precision"):
+                torch.set_float32_matmul_precision("high")
+            if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+                torch.backends.cuda.matmul.allow_tf32 = True
+            if hasattr(torch.backends, "cudnn"):
+                torch.backends.cudnn.allow_tf32 = True
+        except Exception:
+            pass
+
+        body_model = self.body_model
+        if body_model is None:
+            return
+        if getattr(self.config, "yolo_fuse", True):
+            try:
+                body_model.fuse()
+            except Exception as exc:
+                print(f"Warning: YOLO model fusion skipped: {exc}")
+        if getattr(self.config, "yolo_warmup", True):
+            self._warmup_yolo()
+
+    def _warmup_yolo(self) -> None:
+        body_model = self.body_model
+        if body_model is None:
+            return
+        warmup_size = max(64, int(getattr(self.config, "body_input_size", 640) or 640))
+        warmup_frame = np.zeros((warmup_size, warmup_size, 3), dtype=np.uint8)
+        try:
+            body_model.predict(
+                warmup_frame,
+                **self._yolo_common_args(max_people=1),
+            )
+        except Exception as exc:
+            print(f"Warning: YOLO warmup skipped: {exc}")
+
+    def _yolo_common_args(self, max_people: int) -> dict[str, Any]:
+        args: dict[str, Any] = {
+            "conf": self.config.body_conf_threshold,
+            "iou": self.config.body_iou_threshold,
+            "imgsz": self.config.body_input_size,
+            "max_det": max_people,
+            "verbose": False,
+            "device": self.config.yolo_device,
+            "half": self._use_yolo_half,
+        }
+        if getattr(self.config, "yolo_person_class_filter", True):
+            args["classes"] = [0]
+        return args
 
     def _setup_mediapipe(self) -> None:
         try:
@@ -333,31 +387,49 @@ class ONNXPoseHandRunner:
         return np.asarray(tensor_like, dtype=dtype)
 
     def detect_bodies(self, frame_bgr, max_people: int, track: bool):
+        if self.config.body_backend == "mediapipe":
+            body_points = self._detect_body_mediapipe(frame_bgr)
+            if not body_points:
+                return []
+            frame_height, frame_width = frame_bgr.shape[:2]
+            confident_points = [
+                (x, y)
+                for x, y, confidence in body_points
+                if confidence > self.config.body_conf_threshold
+            ]
+            if confident_points:
+                x_values = [point[0] for point in confident_points]
+                y_values = [point[1] for point in confident_points]
+                box = (
+                    max(0, min(x_values)),
+                    max(0, min(y_values)),
+                    min(frame_width, max(x_values)),
+                    min(frame_height, max(y_values)),
+                )
+            else:
+                box = (0, 0, frame_width, frame_height)
+            return [
+                {
+                    "id": 1,
+                    "score": max((confidence for _, _, confidence in body_points), default=0.0),
+                    "box": box,
+                    "body_points": body_points,
+                }
+            ][:max_people]
+
         if track:
             assert self.body_model is not None
             results = self.body_model.track(
                 frame_bgr,
-                conf=self.config.body_conf_threshold,
-                iou=self.config.body_iou_threshold,
-                imgsz=self.config.body_input_size,
-                max_det=max_people,
+                **self._yolo_common_args(max_people),
                 persist=True,
-                verbose=False,
                 tracker=self.config.yolo_tracker,
-                device=self.config.yolo_device,
-                half=self._use_yolo_half,
             )
         else:
             assert self.body_model is not None
             results = self.body_model.predict(
                 frame_bgr,
-                conf=self.config.body_conf_threshold,
-                iou=self.config.body_iou_threshold,
-                imgsz=self.config.body_input_size,
-                max_det=max_people,
-                verbose=False,
-                device=self.config.yolo_device,
-                half=self._use_yolo_half,
+                **self._yolo_common_args(max_people),
             )
 
         if not results:

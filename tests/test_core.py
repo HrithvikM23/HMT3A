@@ -17,7 +17,7 @@ from core.cli import InputAssignment, build_parser, explicit_option_dests, resol
 from core.config import PipelineConfig
 from inference.rtmpose import ONNXPoseHandRunner
 from runners.fused_alignment import align_people_across_cameras
-from core.runtime_config import build_config_for_assignment, prepare_model_assets, select_reference_assignment
+from core.runtime_config import build_config_for_assignment, prepare_model_assets, select_reference_assignment, validate_config
 from core.runtime_profiles import apply_runtime_profile
 from utils.body_geometry import derive_foot_points
 from utils.fusion import DEFAULT_CAMERA_CALIBRATION, fuse_body_views, load_camera_calibrations
@@ -191,6 +191,11 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(config.body_backend, "mediapipe")
         self.assertEqual(config.hand_backend, "mediapipe")
         self.assertTrue(config.enable_backend_fallbacks)
+
+    def test_mediapipe_allows_multi_person_runner_path(self) -> None:
+        config = PipelineConfig(body_backend="mediapipe", hand_backend="mediapipe", max_people=2)
+
+        self.assertTrue(validate_config(config))
 
     def test_prepare_model_assets_skips_unused_models(self) -> None:
         config = PipelineConfig(body_backend="mediapipe", hand_backend="mediapipe")

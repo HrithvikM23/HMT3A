@@ -7,7 +7,7 @@ from pathlib import Path
 import core.config as app_config
 from core.backend_selection import BODY_BACKENDS, HAND_BACKENDS, LANDMARK_BACKENDS
 from core.mediapipe_models import mediapipe_pose_model_names
-from core.runtime_profiles import PROFILE_NAMES, PROFILE_QUALITY
+from core.runtime_profiles import PROFILE_FASTEST, PROFILE_NAMES
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--profile",
         choices=PROFILE_NAMES,
-        default=PROFILE_QUALITY,
+        default=PROFILE_FASTEST,
         help="Runtime profile for app modes: fastest for realtime, mid for balanced, quality for offline renders.",
     )
     parser.add_argument(
@@ -260,7 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--body-input-size",
         type=int,
-        default=960,
+        default=640,
         help="YOLO body model image size.",
     )
     parser.add_argument(
@@ -423,7 +423,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--yolo-tracker",
-        default="botsort.yaml",
+        default="bytetrack.yaml",
         help="Ultralytics tracker config name for multi-person tracking.",
     )
     parser.add_argument(
@@ -434,6 +434,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--yolo-half",
         action="store_true",
         help="Request FP16 body inference on supported CUDA GPUs.",
+    )
+    parser.add_argument(
+        "--no-yolo-fuse",
+        action="store_true",
+        help="Disable YOLO Conv+BatchNorm fusion at model startup.",
+    )
+    parser.add_argument(
+        "--no-yolo-warmup",
+        action="store_true",
+        help="Disable the one-time YOLO warmup inference pass.",
+    )
+    parser.add_argument(
+        "--no-yolo-person-class-filter",
+        action="store_true",
+        help="Disable YOLO class filtering. Pose models normally use class 0 for person.",
     )
     parser.add_argument(
         "--body-detect-interval",

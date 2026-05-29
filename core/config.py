@@ -13,7 +13,7 @@ class PipelineConfig:
     project_root: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent)
     body_model_path: str | Path | None = None
     hand_model_path: Path | None = None
-    profile: str = "quality"
+    profile: str = "fastest"
     body_backend: str = "mediapipe"
     hand_backend: str = "mediapipe"
     enable_backend_fallbacks: bool = False
@@ -27,7 +27,7 @@ class PipelineConfig:
     output_basename: str | None = None
     hand_input_name: str = "images"
     hand_input_dtype: str = "float32"
-    body_input_size: int = 960
+    body_input_size: int = 640
     hand_input_size: int = 640
     processing_width: int = 0
     body_conf_threshold: float = 0.30
@@ -61,9 +61,12 @@ class PipelineConfig:
     fused_depth_scale: float = 1.0
     single_camera_depth_mode: str = "flat"
     auto_performance_enabled: bool = True
-    yolo_tracker: str = "botsort.yaml"
+    yolo_tracker: str = "bytetrack.yaml"
     yolo_device: str | None = None
     yolo_half: bool = False
+    yolo_fuse: bool = True
+    yolo_warmup: bool = True
+    yolo_person_class_filter: bool = True
     body_detect_interval: int = 1
     hand_detect_interval: int = 1
     hand_crop_retries: int = 3
