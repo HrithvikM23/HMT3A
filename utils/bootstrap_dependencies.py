@@ -30,7 +30,7 @@ def _option_value(argv: list[str], option: str) -> str | None:
 def _selected_runtime_modules(argv: list[str] | None = None) -> tuple[str, ...]:
     tokens = list(sys.argv[1:] if argv is None else argv)
     args = SimpleNamespace(
-        landmark_backend=_option_value(tokens, "--landmark-backend") or "yolo",
+        landmark_backend=_option_value(tokens, "--landmark-backend") or "mediapipe",
         body_backend=_option_value(tokens, "--body-backend"),
         hand_backend=_option_value(tokens, "--hand-backend"),
         backend_fallbacks="--backend-fallbacks" in tokens,

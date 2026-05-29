@@ -35,9 +35,18 @@ try {
         '--specpath', "$SpecRoot",
         '--paths', "$ProjectRoot",
         '--exclude-module', 'mediapipe',
-        '--collect-submodules', 'ultralytics',
-        '--collect-submodules', 'cv2',
-        '--collect-submodules', 'onnxruntime'
+        '--exclude-module', 'ultralytics',
+        '--exclude-module', 'torch',
+        '--exclude-module', 'torchvision',
+        '--exclude-module', 'torchaudio',
+        '--exclude-module', 'onnxruntime',
+        '--exclude-module', 'jax',
+        '--exclude-module', 'jaxlib',
+        '--exclude-module', 'polars',
+        '--exclude-module', 'pandas',
+        '--exclude-module', 'scipy',
+        '--exclude-module', 'matplotlib',
+        '--collect-submodules', 'cv2'
     )
 
     $ModelsRoot = Join-Path $ProjectRoot 'models'
