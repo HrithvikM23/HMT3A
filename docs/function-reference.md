@@ -12,7 +12,7 @@ Private helpers are included because much of Kinara's logic is intentionally lig
 
 For end-to-end execution order and module interaction, pair this file with [Architecture And Data Flow](./ARCHITECTURE_AND_DATA_FLOW.md) and [Detailed Runtime Walkthrough](./DETAILED_RUNTIME_WALKTHROUGH.md).
 
-## `main.py`
+## `app/main.py`
 
 - `main`: Thin entrypoint. It runs the dependency bootstrap, parses CLI args, resolves sources, and delegates to the single-input or fused runner.
 
@@ -20,7 +20,7 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 
 - `python -m kinara`: Package entrypoint that calls `main.main`.
 
-## `cli.py`
+## `core/cli.py`
 
 - `InputAssignment`: Immutable mapping of a camera label such as `CAM_0` or `CAM_1` to either a webcam index or a file path.
 - `parse_color`: Parses `B,G,R` CLI strings into OpenCV color tuples.
@@ -30,7 +30,7 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 - `resolve_sources`: Converts CLI or interactive input into a list of `InputAssignment` objects.
 - `build_parser`: Declares the CLI surface.
 
-## `runtime_config.py`
+## `core/runtime_config.py`
 
 - `prepare_model_assets`: Resolves and stages body, hand, and MediaPipe assets before inference starts.
 - `validate_config`: Performs runtime sanity checks on the resolved `PipelineConfig`.
@@ -65,6 +65,8 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 - `bootstrap_paths`: Local vendor path setup, PATH/PYTHONPATH updates, DLL directory registration, and required-file checks.
 - `bootstrap_cuda`: NVIDIA driver, CUDA, and cuDNN discovery plus process environment repair.
 - `bootstrap_packages`: Python module probing, install-plan selection, package installation, and runtime warnings.
+- `hand_tracking`: Hand candidate scoring, wrist/elbow motion prediction, previous-box reuse, and detection/prediction blending.
+- `preview_stream`: Optional launcher bridge that writes the latest processed frame to an app-local JPEG for the native UI preview.
 
 ## `config.py`
 
@@ -131,8 +133,8 @@ For end-to-end execution order and module interaction, pair this file with [Arch
 
 - `PoseHandPipeline.__init__`: Stores shared references to config, runner, smoother, and OSC sender.
 - `PoseHandPipeline.process_frame`: Convenience wrapper that detects and renders pose for one frame and returns the mutated frame.
-- `PoseHandPipeline.detect_pose`: Runs body detection or predicts skipped frames from recent motion, smooths body points, carries optional detector depth metadata, and then calls `detect_hands`.
-- `PoseHandPipeline.detect_hands`: Builds wrist-centered crops, runs or predicts hand inference according to cadence settings, validates results, smooths hands, anchors them to wrists, enforces constraints, and falls back to generated default hands when needed.
+- `PoseHandPipeline.detect_pose`: Runs body detection or predicts skipped frames from recent motion, smooths body points, carries optional detector depth metadata, and then calls `detect_hands` on the original source frame.
+- `PoseHandPipeline.detect_hands`: Builds full-resolution wrist-centered crops, reuses recent hand boxes as extra candidates, runs or predicts hand inference according to cadence settings, scores candidates with temporal and geometric checks, smooths hands, anchors them to wrists, enforces constraints, and falls back to predicted/generated hands when needed.
 - `PoseHandPipeline.render_pose`: Draws body and hands on the frame and optionally sends live UDP.
 - `PoseHandPipeline._draw_body`: Draws body skeleton edges and confident body keypoints.
 - `PoseHandPipeline._draw_hands`: Draws hand boxes, hand skeleton edges, and confident hand keypoints.

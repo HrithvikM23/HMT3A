@@ -68,19 +68,19 @@ Notes: Known YOLO models are stored in `models/body/`. MediaPipe pose TFLite ass
 `--landmark-backend`  
 Function: Selects the high-level landmark backend family.  
 Accepted values: `yolo`, `mediapipe`, `hybrid`.  
-Default: `yolo`  
+Default: `mediapipe`  
 Notes: `yolo` maps to `--body-backend yolo --hand-backend onnx`. `mediapipe` maps to `--body-backend mediapipe --hand-backend mediapipe`. `hybrid` maps to MediaPipe body/hands with backend fallbacks enabled. Use `--model` to pick `pose_landmark_lite.tflite`, `pose_landmark_full.tflite`, or `pose_landmark_heavy.tflite` when MediaPipe body landmarks are active.
 
 `--body-backend`  
 Function: Selects the body landmark backend.  
 Accepted values: `yolo`, `mediapipe`.  
-Default: `yolo`  
+Default: resolved from `--landmark-backend`; `mediapipe` unless you select `--landmark-backend yolo`.  
 Notes: `yolo` supports multi-person tracking. `mediapipe` can provide richer single-person foot landmarks.
 
 `--hand-backend`  
 Function: Selects the hand landmark backend.  
 Accepted values: `onnx`, `mediapipe`.  
-Default: `onnx`
+Default: resolved from `--landmark-backend`; `mediapipe` unless you select `--landmark-backend yolo`.
 
 `--backend-fallbacks`  
 Function: Enables alternate backend fallback when the selected body or hand backend misses a frame.  
@@ -122,11 +122,11 @@ Accepted range: integer `> 0`.
 Default: `640`
 
 `--processing-width`  
-Function: Runs body and hand landmark detection on a resized working frame, then scales landmarks back to the original output frame.  
+Function: Runs body/person detection on a resized working frame, then scales body landmarks back to the original output frame.  
 Accepted range: integer `>= 0`.  
 Default: `0`  
-Notes: `0` uses the source resolution. Values such as `480` or `720` are useful for fast preview and webcam runs, especially with 1080p or 2K input. The saved render keeps the original video size.
-When enabled, startup logs print the actual source size and inference size, for example `source 1920x1080 -> inference 640x360`.
+Notes: `0` uses the source resolution. Values such as `480` or `720` are useful for fast preview and webcam runs, especially with 1080p or 2K input. Hand crops stay on the original source frame so downscaling body/person inference does not blur the hand detector input. The saved render keeps the original video size.
+When enabled, startup logs print the actual source size and body/person inference size, for example `source 1920x1080 -> inference 640x360`.
 
 ## Detection Thresholds
 

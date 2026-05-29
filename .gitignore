@@ -2,6 +2,14 @@
 # Python cache / builds
 # ----------------------
 __pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.spec
+artifacts/pyinstaller/
+artifacts/windows/
 *.py[cod]
 *.pyo
 *.pyd
@@ -21,13 +29,16 @@ venv/
 # ----------------------
 logs/
 outputs/
+.kinara_runtime/
 .tmp_test_runtime/
 .tmp_smoke/
 tmp_test/
+tmp/
 *.log
 *.mp4
 *.avi
 *.jpg
+*.jpeg
 
 # ----------------------
 # Model weights (VERY IMPORTANT)

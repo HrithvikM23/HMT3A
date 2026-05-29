@@ -19,7 +19,7 @@ If you are brand new to the repo:
 1. Read this file first for the big picture.
 2. Read [Detailed Runtime Walkthrough](./DETAILED_RUNTIME_WALKTHROUGH.md) next for a story-like execution trace.
 3. Read [Function Reference](./FUNCTION_REFERENCE.md) when you need symbol-level detail.
-4. Open `main.py`, then follow the call chains into `cli.py`, `runtime_config.py`, and `runners/`.
+4. Open `app/main.py`, then follow the call chains into `core/cli.py`, `core/runtime_config.py`, and `runners/`.
 
 ## System Goal
 
@@ -35,10 +35,10 @@ At a high level, Kinara does five jobs:
 
 | Module | Main responsibility | Consumes | Produces |
 | --- | --- | --- | --- |
-| `main.py` | Bootstrap and mode selection | CLI args, input sources | delegated runtime session |
-| `cli.py` | CLI parsing and source selection | argv, interactive prompts | input assignments |
+| `app/main.py` | Bootstrap and mode selection | CLI args, input sources | delegated runtime session |
+| `core/cli.py` | CLI parsing and source selection | argv, interactive prompts | input assignments |
 | `runtime_profiles.py` | Fastest/mid/quality tuning presets | parsed CLI namespace | profile-applied runtime knobs |
-| `runtime_config.py` | Model prep and config validation | CLI namespace, source assignment | `PipelineConfig` |
+| `core/runtime_config.py` | Model prep and config validation | CLI namespace, source assignment | `PipelineConfig` |
 | `runners/` | Single, multi-person, and fused loops | `PipelineConfig`, frames | rendered video, live packets, exports |
 | `utils/bootstrap_*` | Startup dependency, CUDA, and environment checks | local Python environment | repaired process paths, install plan |
 | `config.py` | Central runtime config and drawing constants | CLI-derived values | `PipelineConfig` |
@@ -88,7 +88,7 @@ flowchart TD
 
 ### 1. Bootstrap happens before the CLI logic
 
-`main.py` imports `ensure_runtime_ready()` and calls it immediately near the top of the file. That means the environment is repaired before argument parsing or model loading begins.
+`app/main.py` imports `ensure_runtime_ready()` and calls it immediately near the top of the file. That means the environment is repaired before argument parsing or model loading begins.
 
 This is important because the project is designed to run on machines where:
 
@@ -607,7 +607,7 @@ Kinara prefers stable output over perfect detector purity. Several modules activ
 
 - Missing body detection: the pipeline returns a zero-shaped body array so downstream code stays structurally valid.
 - Brief landmark loss: `LandmarkSmoother` holds the last confident point for a short number of frames.
-- Bad hand detection: the hand is rejected and replaced by a generated fallback hand.
+- Bad hand detection: candidates are scored against wrist geometry, palm spread, and recent hand motion; rejected hands fall back to the predicted previous hand before using a generated fallback.
 - Multi-person hand stealing: the wrong hand is discarded and replaced by a fallback on the incorrect owner.
 - Missing Blender frame joints: the importer reuses the last valid joint rather than collapsing to origin.
 - No export frames: export helpers simply do nothing.
@@ -621,7 +621,7 @@ If you need to change the project, these are the best entry points.
 ### Add or replace a body model
 
 - start in `utils/model_assets.py`
-- update `prepare_model_assets()` in `runtime_config.py`
+- update `prepare_model_assets()` in `core/runtime_config.py`
 - use `--model yolo11n-pose.pt` for YOLO mode or `--model pose_landmark_full.tflite` for MediaPipe mode
 - keep `ONNXPoseHandRunner.detect_bodies()` returning the existing body-detection contract
 
@@ -629,6 +629,7 @@ If you need to change the project, these are the best entry points.
 
 - start in `utils/normalize.py`
 - then inspect `PoseHandPipeline.detect_hands()`
+- inspect `utils/hand_tracking.py` when changing candidate scoring, prediction, or temporal stabilization
 
 ### Change temporal behavior
 
@@ -659,7 +660,7 @@ The design is intentionally conservative:
 - explicit data contracts
 - detector output stays close to image space until export needs a richer representation
 - Single-camera exports stay flat in depth by default; MediaPipe world-landmark relative Z is available only when `--single-camera-depth mediapipe` is selected
-- `--processing-width` can downscale the inference frame for speed while preserving original-size rendered output
+- `--processing-width` can downscale body/person inference for speed while preserving original-size rendered output and full-resolution hand crops
 - temporal state is owned locally by the object that needs it
 - exporters are downstream of stabilization, not mixed into inference
 - Blender import is decoupled from capture-time runtime decisions
@@ -668,9 +669,9 @@ The result is easier to debug than a deeply abstracted system because each stage
 
 ## Recommended Reading Order In Source
 
-1. `main.py`
-2. `cli.py`
-3. `runtime_config.py`
+1. `app/main.py`
+2. `core/cli.py`
+3. `core/runtime_config.py`
 4. `runners/`
 5. `config.py`
 6. `pipeline/pipeline.py`

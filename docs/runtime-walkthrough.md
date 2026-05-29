@@ -6,7 +6,7 @@ This file explains the project as if you were tracing it during execution. The a
 
 ## 1. Process Startup
 
-When Python starts `main.py`, the first meaningful thing that happens is:
+When Python starts `app/main.py`, the first meaningful thing that happens is:
 
 ```python
 from utils.bootstrap_dependencies import ensure_runtime_ready
@@ -24,6 +24,7 @@ Kinara depends on a stack that is easy to misconfigure on Windows:
 - Ultralytics
 - torch / torchvision
 - ONNX Runtime
+- MediaPipe, only when a MediaPipe backend is selected
 - CUDA DLLs
 - cuDNN DLLs
 
@@ -39,13 +40,14 @@ On many laptops, all of those pieces are technically installed somewhere, but Py
 4. Scan the machine for GPU runtime locations.
 5. Add discovered CUDA/cuDNN folders to the process environment.
 6. Register DLL directories on Windows.
-7. Check whether Python packages import correctly.
-8. Install anything missing into the local vendor folder.
-9. Probe ONNX Runtime providers and print warnings if GPU acceleration still is not visible.
+7. Resolve the selected backend flags to decide which Python packages are needed.
+8. Check whether those Python packages import correctly.
+9. Install anything missing into the local vendor folder.
+10. Probe ONNX Runtime providers and print warnings if GPU acceleration still is not visible.
 
 ### Important side effect
 
-This startup layer makes the repo much more portable because the project can carry its own Python dependencies in `.vendor_py311` instead of requiring a perfectly curated system-wide Python install.
+This startup layer makes the repo much more portable because the project can carry its own Python dependencies in `.vendor_py311` instead of requiring a perfectly curated system-wide Python install. In the packaged Windows launcher, the vendor folder lives beside `Kinara.exe`, and optional dependencies such as `mediapipe==0.10.21` are installed there only when the selected session needs them.
 
 ## 3. CLI Resolution
 
@@ -308,6 +310,8 @@ If nothing matches strongly enough, it creates a new `PersonTrack`.
 
 When a track is updated from a detection, the tracker does not run a full body pipeline again. It already has the body points from YOLO. It only runs the track's `PoseHandPipeline.detect_hands(frame, body_points)` to get hands relative to that specific body.
 
+Hand candidates are no longer selected by raw detector confidence alone. The pipeline retries the wrist crop, can reuse the previous hand box as a candidate, anchors detections back to the body wrist, scores candidates against palm geometry and recent motion, and blends accepted detections with the predicted hand path. If detection drops for a moment, the previous hand is translated by wrist/elbow motion before the generated fallback is used.
+
 This is a good example of code reuse: the same hand pipeline is used in both single-person and multi-person mode, but the track already supplies the body.
 
 ### Stage D. Cross-person hand cleanup
@@ -511,9 +515,9 @@ Look at:
 
 The simplest accurate mental model for Kinara is:
 
-- `main.py` bootstraps and chooses the runtime mode
-- `cli.py` parses arguments and input assignments
-- `runtime_config.py` describes and validates the run
+- `app/main.py` bootstraps and chooses the runtime mode
+- `core/cli.py` parses arguments and input assignments
+- `core/runtime_config.py` describes and validates the run
 - `runners` own the single, multi-person, and fused loops
 - `config.py` stores the run settings
 - `inference` detects
