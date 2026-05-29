@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import urlopen
 
-from mediapipe_models import mediapipe_pose_model_names, normalize_mediapipe_pose_model
+from core.mediapipe_models import mediapipe_pose_model_names, normalize_mediapipe_pose_model
 
 
 @dataclass(frozen=True, slots=True)

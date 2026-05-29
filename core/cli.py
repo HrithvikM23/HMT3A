@@ -4,10 +4,10 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
-import config as app_config
-from backend_selection import BODY_BACKENDS, HAND_BACKENDS, LANDMARK_BACKENDS
-from mediapipe_models import mediapipe_pose_model_names
-from runtime_profiles import PROFILE_NAMES, PROFILE_QUALITY
+import core.config as app_config
+from core.backend_selection import BODY_BACKENDS, HAND_BACKENDS, LANDMARK_BACKENDS
+from core.mediapipe_models import mediapipe_pose_model_names
+from core.runtime_profiles import PROFILE_NAMES, PROFILE_QUALITY
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--landmark-backend",
         choices=LANDMARK_BACKENDS,
-        default="yolo",
+        default="mediapipe",
         help="Select the high-level landmark backend family: yolo, mediapipe, or hybrid.",
     )
     parser.add_argument(

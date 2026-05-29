@@ -3,15 +3,16 @@ from __future__ import annotations
 import cv2
 
 from camera.capture import VideoCaptureSession
-from config import PipelineConfig
+from core.config import PipelineConfig
 from inference.rtmpose import ONNXPoseHandRunner
 from network.osc_sender import OSCSender
 from pipeline.pipeline import PoseHandPipeline
-from runtime_config import prepare_runtime_config
+from core.runtime_config import prepare_runtime_config
 from runners.common import export_motion_bundle, print_saved_paths
 from runners.multi_person import run_multi_person_assignment
 from utils.exports import build_joint_map
 from utils.fps import FpsMeter, draw_fps_overlay
+from utils.preview_stream import PreviewFrameSink
 from utils.smoothing import LandmarkSmoother
 
 
@@ -36,6 +37,7 @@ def run_assignment(config: PipelineConfig) -> None:
     motion_frames: list[dict[str, object]] = []
     frame_index = 0
     fps_meter = FpsMeter("single", config.fps_log_interval)
+    preview_sink = PreviewFrameSink()
 
     try:
         while True:
@@ -64,6 +66,7 @@ def run_assignment(config: PipelineConfig) -> None:
             motion_frames.append({"frame_index": frame_index, "joints": joints})
             fps_meter.tick(frame_index)
             draw_fps_overlay(frame, fps_meter, config.fps_overlay_enabled)
+            preview_sink.write(frame, frame_index)
             frame_index += 1
             session.write(frame)
 

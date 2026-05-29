@@ -4,7 +4,7 @@ from pathlib import Path
 import importlib
 import json
 
-from cli import InputAssignment
+from core.cli import InputAssignment
 
 
 def calibration_available() -> bool:

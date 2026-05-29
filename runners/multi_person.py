@@ -3,16 +3,17 @@ from __future__ import annotations
 import cv2
 
 from camera.capture import VideoCaptureSession
-from config import PipelineConfig
+from core.config import PipelineConfig
 from inference.rtmpose import ONNXPoseHandRunner
 from network.osc_sender import OSCSender
-from runtime_config import prepare_runtime_config
+from core.runtime_config import prepare_runtime_config
 from runners.common import build_person_payload, draw_person_overlay, print_saved_paths
 from utils.exports import export_multi_person_fbx_bundle, export_multi_person_json
 from utils.fps import FpsMeter, draw_fps_overlay
 from utils.motion_cleanup import cleanup_multi_person_frames
 from utils.multi_person import MultiPersonTracker
 from utils.payloads import PersonPayload
+from utils.preview_stream import PreviewFrameSink
 
 
 def run_multi_person_assignment(config: PipelineConfig) -> None:
@@ -32,6 +33,7 @@ def run_multi_person_assignment(config: PipelineConfig) -> None:
     motion_frames: list[dict[str, object]] = []
     frame_index = 0
     fps_meter = FpsMeter("multi_person", config.fps_log_interval)
+    preview_sink = PreviewFrameSink()
 
     try:
         while True:
@@ -73,6 +75,7 @@ def run_multi_person_assignment(config: PipelineConfig) -> None:
             motion_frames.append({"frame_index": frame_index, "people": payload_people})
             fps_meter.tick(frame_index)
             draw_fps_overlay(frame, fps_meter, config.fps_overlay_enabled)
+            preview_sink.write(frame, frame_index)
             frame_index += 1
             session.write(frame)
 

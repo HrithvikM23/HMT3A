@@ -6,12 +6,12 @@ from typing import Any
 import cv2
 
 from camera.capture import VideoInputSource, VideoOutputWriter
-from cli import InputAssignment
-from config import PipelineConfig
+from core.cli import InputAssignment
+from core.config import PipelineConfig
 from inference.rtmpose import ONNXPoseHandRunner
 from network.osc_sender import OSCSender
 from pipeline.pipeline import PoseHandPipeline
-from runtime_config import build_fused_config, prepare_runtime_config
+from core.runtime_config import build_fused_config, prepare_runtime_config
 from runners.common import (
     box_from_body_points,
     build_person_payload,
@@ -27,6 +27,7 @@ from utils.fusion import estimate_joint_depths, fuse_body_views, load_camera_cal
 from utils.motion_cleanup import cleanup_multi_person_frames
 from utils.multi_person import MultiPersonTracker
 from utils.payloads import HandPayload, PersonPayload
+from utils.preview_stream import PreviewFrameSink
 from utils.smoothing import LandmarkSmoother
 from utils.triangulation import (
     calibrated_backend_available,
@@ -80,6 +81,7 @@ def run_fused_assignments(
     frame_index = 0
     export_fps = config.fallback_fps
     fps_meter = FpsMeter("fused", config.fps_log_interval)
+    preview_sink = PreviewFrameSink()
     try:
         min_offset = min((config.sync_offsets.get(assignment.label.upper(), 0) for assignment in assignments), default=0)
         for assignment in assignments:
@@ -155,6 +157,7 @@ def run_fused_assignments(
             frame_index += 1
             fps_meter.tick(frame_index - 1)
             draw_fps_overlay(canvas, fps_meter, config.fps_overlay_enabled)
+            preview_sink.write(canvas, frame_index - 1)
             writer.write(canvas)
 
             if config.enable_preview:

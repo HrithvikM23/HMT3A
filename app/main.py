@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
-from cli import build_parser, explicit_option_dests, resolve_sources
-from runtime_profiles import apply_runtime_profile
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from core.cli import build_parser, explicit_option_dests, resolve_sources
+from core.runtime_profiles import apply_runtime_profile
 from utils.bootstrap_dependencies import ensure_runtime_ready
 
 
@@ -18,7 +23,7 @@ def main() -> None:
     from utils.calibration import calibrate_cameras, calibration_available
     from runners.fused import run_fused_assignments
     from runners.single import run_assignment
-    from runtime_config import build_config_for_assignment
+    from core.runtime_config import build_config_for_assignment
 
     assignments = resolve_sources(args)
     if not assignments:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import socket
 
-import config as app_config
+import core.config as app_config
 
 class OSCSender:
     def __init__(

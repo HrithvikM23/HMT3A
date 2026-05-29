@@ -5,7 +5,7 @@ from pathlib import Path
 
 import cv2
 
-from config import PipelineConfig
+from core.config import PipelineConfig
 from pipeline.pipeline import PoseHandPipeline
 from utils.exports import build_joint_map, export_motion_fbx, export_motion_json, _normalize_export_frames
 from utils.fusion import fuse_hand_views

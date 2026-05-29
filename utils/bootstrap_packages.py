@@ -4,6 +4,7 @@ import importlib
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 try:
     import importlib.metadata as importlib_metadata
@@ -12,6 +13,22 @@ except ImportError:  # pragma: no cover
 
 from utils.bootstrap_paths import dedupe_paths, prepend_pythonpath, prepend_sys_path
 from utils.bootstrap_state import MODULE_TO_PACKAGE, ModuleStatus, RuntimeReport, VENDOR_DIR
+
+
+def installer_python() -> str:
+    candidates = [
+        os.environ.get("KINARA_PYTHON", ""),
+        r"C:\Program Files\Blender Foundation\Blender 5.0\5.0\python\bin\python.exe",
+        getattr(sys, "_base_executable", ""),
+        sys.executable,
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.exists() and path.name.lower() == "python.exe":
+            return str(path)
+    return sys.executable
 
 
 def distribution_installed(distribution_name: str) -> bool:
@@ -77,8 +94,9 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
 
 
 def ensure_pip() -> None:
+    python = installer_python()
     completed = subprocess.run(
-        [sys.executable, "-m", "pip", "--version"],
+        [python, "-m", "pip", "--version"],
         capture_output=True,
         text=True,
         check=False,
@@ -88,7 +106,7 @@ def ensure_pip() -> None:
         return
 
     subprocess.run(
-        [sys.executable, "-m", "ensurepip", "--upgrade"],
+        [python, "-m", "ensurepip", "--upgrade"],
         check=True,
         timeout=120,
     )
@@ -99,8 +117,9 @@ def install_packages(packages: list[str]) -> None:
         return
 
     ensure_pip()
+    python = installer_python()
     command = [
-        sys.executable,
+        python,
         "-m",
         "pip",
         "install",
@@ -121,8 +140,8 @@ def install_packages(packages: list[str]) -> None:
     prepend_sys_path(VENDOR_DIR)
 
 
-def probe_runtime(report: RuntimeReport) -> tuple[list[ModuleStatus], list[str]]:
-    statuses = module_group_status(tuple(MODULE_TO_PACKAGE))
+def probe_runtime(report: RuntimeReport, module_names: tuple[str, ...] | None = None) -> tuple[list[ModuleStatus], list[str]]:
+    statuses = module_group_status(module_names or tuple(MODULE_TO_PACKAGE))
     warnings = list(report.warnings)
 
     onnx_status = next((status for status in statuses if status.module_name == "onnxruntime"), None)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import tempfile
 import unittest
 import json
@@ -8,15 +9,16 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import patch
 
 import numpy as np
 
-from cli import InputAssignment, build_parser, explicit_option_dests, resolve_sources
-from config import PipelineConfig
+from core.cli import InputAssignment, build_parser, explicit_option_dests, resolve_sources
+from core.config import PipelineConfig
 from inference.rtmpose import ONNXPoseHandRunner
 from runners.fused_alignment import align_people_across_cameras
-from runtime_config import build_config_for_assignment, prepare_model_assets, select_reference_assignment
-from runtime_profiles import apply_runtime_profile
+from core.runtime_config import build_config_for_assignment, prepare_model_assets, select_reference_assignment
+from core.runtime_profiles import apply_runtime_profile
 from utils.body_geometry import derive_foot_points
 from utils.fusion import DEFAULT_CAMERA_CALIBRATION, fuse_body_views, load_camera_calibrations
 from utils.fps import FpsMeter, draw_fps_overlay
@@ -24,8 +26,10 @@ from utils.normalize import build_hand_box
 from utils.color_profile import color_profile_similarity
 from utils.exports import build_joint_map, export_motion_json
 from utils.hand_fallback import anchor_hand_to_wrist, has_usable_hand_detection, is_hand_detection_valid
+from utils.hand_tracking import hand_detection_score, predict_hand_payload
 from utils.motion_cleanup import cleanup_motion_frames
 from utils.prediction import predict_points, translate_points
+from utils.preview_stream import PreviewFrameSink
 from utils.skeleton import JointMap
 from utils.triangulation import apply_triangulated_overrides, triangulate_observation_frames
 from pipeline.pipeline import PoseHandPipeline
@@ -55,6 +59,8 @@ class CoreLogicTests(unittest.TestCase):
         config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.video_path, 0)
+        self.assertEqual(config.body_backend, "mediapipe")
+        self.assertEqual(config.hand_backend, "mediapipe")
         self.assertEqual(config.provider_names, ("CUDAExecutionProvider",))
         self.assertFalse(config.enable_preview)
         self.assertEqual(config.max_people, 1)
@@ -97,6 +103,7 @@ class CoreLogicTests(unittest.TestCase):
         parser = build_parser()
         argv = [
             "--source", "0",
+            "--landmark-backend", "yolo",
             "--profile", "fastest",
             "--body-detect-interval", "1",
         ]
@@ -223,7 +230,7 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(scale_x, 4.0)
         self.assertEqual(scale_y, 4.0)
 
-    def test_processing_width_is_used_by_body_and_hand_models(self) -> None:
+    def test_processing_width_keeps_hand_detection_on_source_frame(self) -> None:
         class Runner:
             last_body_depths = {}
             last_hand_depths = None
@@ -269,7 +276,7 @@ class CoreLogicTests(unittest.TestCase):
         self.assertIn("source 200x100 -> inference 50x25", stdout.getvalue())
         self.assertEqual(runner.body_frame_shape[:2], (25, 50))
         self.assertTrue(runner.hand_frame_shapes)
-        self.assertTrue(all(shape[:2] == (25, 50) for shape in runner.hand_frame_shapes))
+        self.assertTrue(all(shape[:2] == (100, 200) for shape in runner.hand_frame_shapes))
         self.assertEqual(body_points[5][0], 100)
         self.assertIn("left", hands_by_side)
 
@@ -501,6 +508,95 @@ class CoreLogicTests(unittest.TestCase):
         self.assertTrue(has_usable_hand_detection(raw_hand, config))
         anchored = anchor_hand_to_wrist(raw_hand, wrist)
         self.assertTrue(is_hand_detection_valid(anchored, wrist, elbow, config))
+
+    def test_hand_detection_score_prefers_temporally_consistent_hand(self) -> None:
+        config = PipelineConfig()
+        wrist = (100, 100, 0.9)
+        elbow = (100, 150, 0.9)
+        stable = [
+            (100, 100, 0.9), (94, 86, 0.8), (90, 72, 0.8), (86, 58, 0.7), (82, 44, 0.7),
+            (96, 82, 0.8), (94, 64, 0.8), (92, 46, 0.7), (90, 30, 0.7),
+            (104, 80, 0.8), (104, 60, 0.8), (104, 42, 0.7), (104, 24, 0.7),
+            (112, 82, 0.8), (114, 64, 0.8), (116, 48, 0.7), (118, 34, 0.7),
+            (120, 88, 0.8), (126, 74, 0.8), (132, 60, 0.7), (138, 48, 0.7),
+        ]
+        jumpy = [(x + 90, y + 70, conf) for x, y, conf in stable]
+
+        stable_score = hand_detection_score(stable, wrist, elbow, config, previous_points=stable)
+        jumpy_score = hand_detection_score(jumpy, wrist, elbow, config, previous_points=stable)
+
+        self.assertGreater(stable_score, jumpy_score)
+
+    def test_predict_hand_payload_uses_wrist_and_elbow_motion(self) -> None:
+        previous_payload = {
+            "box": (90, 90, 150, 150),
+            "points": [(100, 100, 0.8)] * 21,
+        }
+
+        predicted = predict_hand_payload(
+            previous_payload,
+            previous_wrist=(100, 100, 0.9),
+            wrist_point=(110, 112, 0.9),
+            confidence_decay=0.5,
+            previous_elbow=(100, 150, 0.9),
+            elbow_point=(106, 158, 0.9),
+        )
+
+        self.assertIsNotNone(predicted)
+        assert predicted is not None
+        box, points, _ = predicted
+        self.assertEqual(box, (99, 101, 159, 161))
+        self.assertEqual(points[0], (109, 111, 0.4))
+
+    def test_preview_frame_sink_writes_latest_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            preview_path = Path(tmp_dir) / "preview.jpg"
+            old_path = os.environ.get("KINARA_PREVIEW_FRAME")
+            old_interval = os.environ.get("KINARA_PREVIEW_INTERVAL")
+            os.environ["KINARA_PREVIEW_FRAME"] = str(preview_path)
+            os.environ["KINARA_PREVIEW_INTERVAL"] = "1"
+            try:
+                sink = PreviewFrameSink()
+                frame = np.zeros((12, 16, 3), dtype=np.uint8)
+                frame[:, :, 1] = 255
+                sink.write(frame, 0)
+            finally:
+                if old_path is None:
+                    os.environ.pop("KINARA_PREVIEW_FRAME", None)
+                else:
+                    os.environ["KINARA_PREVIEW_FRAME"] = old_path
+                if old_interval is None:
+                    os.environ.pop("KINARA_PREVIEW_INTERVAL", None)
+                else:
+                    os.environ["KINARA_PREVIEW_INTERVAL"] = old_interval
+
+            frame_files = sorted(Path(tmp_dir).glob("preview_*.jpg"))
+            self.assertEqual(len(frame_files), 1)
+            self.assertGreater(frame_files[0].stat().st_size, 0)
+
+    def test_preview_frame_sink_ignores_locked_replace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            preview_path = Path(tmp_dir) / "preview.jpg"
+            old_path = os.environ.get("KINARA_PREVIEW_FRAME")
+            old_interval = os.environ.get("KINARA_PREVIEW_INTERVAL")
+            os.environ["KINARA_PREVIEW_FRAME"] = str(preview_path)
+            os.environ["KINARA_PREVIEW_INTERVAL"] = "1"
+            try:
+                sink = PreviewFrameSink()
+                frame = np.zeros((12, 16, 3), dtype=np.uint8)
+                with patch.object(Path, "replace", side_effect=PermissionError("locked")):
+                    sink.write(frame, 0)
+            finally:
+                if old_path is None:
+                    os.environ.pop("KINARA_PREVIEW_FRAME", None)
+                else:
+                    os.environ["KINARA_PREVIEW_FRAME"] = old_path
+                if old_interval is None:
+                    os.environ.pop("KINARA_PREVIEW_INTERVAL", None)
+                else:
+                    os.environ["KINARA_PREVIEW_INTERVAL"] = old_interval
+
+            self.assertEqual(list(Path(tmp_dir).glob("*.tmp.jpg")), [])
 
     def test_load_camera_calibrations_merges_uppercase_labels(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

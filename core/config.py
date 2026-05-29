@@ -10,12 +10,12 @@ class LiveUdpDefaults:
 
 @dataclass(slots=True)
 class PipelineConfig:
-    project_root: Path = field(default_factory=lambda: Path(__file__).resolve().parent)
+    project_root: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent)
     body_model_path: str | Path | None = None
     hand_model_path: Path | None = None
     profile: str = "quality"
-    body_backend: str = "yolo"
-    hand_backend: str = "onnx"
+    body_backend: str = "mediapipe"
+    hand_backend: str = "mediapipe"
     enable_backend_fallbacks: bool = False
     body_model_variant: str = "yolo11x-pose.pt"
     mediapipe_pose_model: str = "pose_landmark_full.tflite"

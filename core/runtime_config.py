@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from backend_selection import needs_mediapipe, needs_onnx_hand, needs_yolo_body, resolve_backend_selection
-from cli import InputAssignment, sanitize_label
-from config import PipelineConfig
-from mediapipe_models import (
+from core.backend_selection import needs_mediapipe, needs_onnx_hand, needs_yolo_body, resolve_backend_selection
+from core.cli import InputAssignment, sanitize_label
+from core.config import PipelineConfig
+from core.mediapipe_models import (
     DEFAULT_MEDIAPIPE_POSE_MODEL,
     is_mediapipe_pose_model,
     mediapipe_pose_model_names,

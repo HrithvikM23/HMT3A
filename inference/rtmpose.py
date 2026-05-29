@@ -7,8 +7,8 @@ import shutil
 from pathlib import Path
 from typing import Any, TypedDict, cast
 
-from backend_selection import needs_mediapipe, needs_onnx_hand, needs_yolo_body
-from mediapipe_models import (
+from core.backend_selection import needs_mediapipe, needs_onnx_hand, needs_yolo_body
+from core.mediapipe_models import (
     DEFAULT_MEDIAPIPE_POSE_MODEL,
     mediapipe_pose_model_complexity,
 )
