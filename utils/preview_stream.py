@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import time
+from pathlib import Path
 from uuid import uuid4
 
 import cv2

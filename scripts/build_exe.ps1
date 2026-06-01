@@ -2,8 +2,6 @@ $ErrorActionPreference = 'Stop'
 
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptRoot
-$Python = 'C:\Program Files\Blender Foundation\Blender 5.0\5.0\python\bin\python.exe'
-$PyInstaller = Join-Path $env:APPDATA 'Python\Python311\Scripts\pyinstaller.exe'
 $BundleModels = Join-Path ([System.IO.Path]::GetTempPath()) 'kinara_bundle_models'
 $ArtifactsRoot = Join-Path $ProjectRoot 'artifacts'
 $DistRoot = Join-Path $ArtifactsRoot 'windows'
@@ -11,12 +9,46 @@ $BuildRoot = Join-Path $ArtifactsRoot 'pyinstaller\build'
 $SpecRoot = Join-Path $ArtifactsRoot 'pyinstaller\spec'
 $BuiltLauncher = Join-Path $DistRoot 'Kinara\Kinara.exe'
 
-if (-not (Test-Path -LiteralPath $Python)) {
-    throw "Python runtime not found: $Python"
+function Resolve-KinaraPython {
+    $PathCandidates = @(
+        $env:KINARA_BUILD_PYTHON,
+        $env:KINARA_PYTHON,
+        (Join-Path $ProjectRoot '.venv\Scripts\python.exe')
+    )
+    $CommandCandidate = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -ne $CommandCandidate) {
+        $PathCandidates += $CommandCandidate.Source
+    }
+
+    foreach ($Candidate in $PathCandidates) {
+        if ([string]::IsNullOrWhiteSpace($Candidate)) {
+            continue
+        }
+        $Resolved = $Candidate
+        if (Test-Path -LiteralPath $Resolved -PathType Container) {
+            $Resolved = Join-Path $Resolved 'python.exe'
+        }
+        if ((Test-Path -LiteralPath $Resolved -PathType Leaf) -and ((Split-Path -Leaf $Resolved).ToLowerInvariant() -eq 'python.exe')) {
+            return $Resolved
+        }
+    }
+
+    throw "Python runtime not found. Set KINARA_BUILD_PYTHON or KINARA_PYTHON to a Python 3.11 python.exe."
 }
-if (-not (Test-Path -LiteralPath $PyInstaller)) {
-    throw "PyInstaller not found: $PyInstaller"
+
+$Python = Resolve-KinaraPython
+$env:PYTHONNOUSERSITE = $null
+Write-Host "Using Python: $Python"
+$PyInstallerVersion = & $Python -m PyInstaller --version
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller is not installed for $Python. Run: `"$Python`" -m pip install pyinstaller"
 }
+$PySideCheck = & $Python -c "import PySide6; print(PySide6.__version__)"
+if ($LASTEXITCODE -ne 0) {
+    throw "PySide6 is not installed for $Python. Run: `"$Python`" -m pip install PySide6"
+}
+Write-Host "Using PyInstaller: $PyInstallerVersion"
+Write-Host "Using PySide6: $PySideCheck"
 
 Push-Location $ProjectRoot
 try {
@@ -34,6 +66,7 @@ try {
         '--workpath', "$BuildRoot",
         '--specpath', "$SpecRoot",
         '--paths', "$ProjectRoot",
+        '--exclude-module', 'cv2',
         '--exclude-module', 'mediapipe',
         '--exclude-module', 'ultralytics',
         '--exclude-module', 'torch',
@@ -46,7 +79,9 @@ try {
         '--exclude-module', 'pandas',
         '--exclude-module', 'scipy',
         '--exclude-module', 'matplotlib',
-        '--collect-submodules', 'cv2'
+        '--hidden-import', 'plistlib',
+        '--hidden-import', 'timeit',
+        '--hidden-import', 'zoneinfo'
     )
 
     $ModelsRoot = Join-Path $ProjectRoot 'models'
@@ -85,7 +120,7 @@ try {
 
     $PyInstallerArgs += (Join-Path $ProjectRoot 'app\kinara_launcher.py')
 
-    & $PyInstaller @PyInstallerArgs
+    & $Python -m PyInstaller @PyInstallerArgs
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code $LASTEXITCODE"
     }

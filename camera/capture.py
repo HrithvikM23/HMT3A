@@ -10,7 +10,15 @@ class VideoInputSource:
         source = video_path if isinstance(video_path, int) else str(video_path)
         self.cap = cv2.VideoCapture(source)
         if not self.cap.isOpened():
-            raise RuntimeError(f"Could not open video file: {video_path}")
+            if isinstance(video_path, int):
+                raise RuntimeError(
+                    f"Could not open camera index {video_path}. Check that the camera is connected, not in use by another app, "
+                    "and that the selected index is correct."
+                )
+            raise RuntimeError(
+                f"Could not open video file: {video_path}. Check that the file exists, the codec is supported by OpenCV, "
+                "and the file is not corrupt."
+            )
 
         self.frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -33,10 +41,14 @@ class VideoInputSource:
 
 class VideoOutputWriter:
     def __init__(self, output_path: Path, frame_width: int, frame_height: int, fps: float, output_fourcc: str = "mp4v"):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         fourcc = cv2.VideoWriter.fourcc(*output_fourcc[:4].ljust(4))
         self.writer = cv2.VideoWriter(str(output_path), fourcc, fps, (frame_width, frame_height))
         if not self.writer.isOpened():
-            raise RuntimeError(f"Could not open video writer: {output_path}")
+            raise RuntimeError(
+                f"Could not open video writer: {output_path}. Check that the directory is writable and FourCC "
+                f"'{output_fourcc[:4].ljust(4)}' is supported for this output extension."
+            )
 
     def write(self, frame) -> None:
         self.writer.write(frame)

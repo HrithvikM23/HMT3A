@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 FBX_TIME_UNIT = 46186158000
 
 

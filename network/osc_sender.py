@@ -5,6 +5,7 @@ import socket
 
 import core.config as app_config
 
+
 class OSCSender:
     def __init__(
         self,

@@ -3,9 +3,17 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import timeit  # noqa: F401 - keep bundled for runtime-installed calibration dependencies.
+import zoneinfo  # noqa: F401 - keep bundled for pandas/aniposelib timezone handling.
 from types import SimpleNamespace
 
-from core.backend_selection import needs_mediapipe, needs_onnx_hand, needs_yolo_body, resolve_backend_selection
+from core.backend_selection import (
+    needs_mediapipe,
+    needs_onnx_hand,
+    needs_rtmpose_body,
+    needs_yolo_body,
+    resolve_backend_selection,
+)
 from utils.bootstrap_cuda import inspect_runtime, repair_runtime_paths
 from utils.bootstrap_packages import (
     dedupe_warning_messages,
@@ -15,6 +23,7 @@ from utils.bootstrap_packages import (
 )
 from utils.bootstrap_paths import ensure_local_environment, find_missing_project_files
 from utils.bootstrap_state import MODULE_TO_PACKAGE, VENDOR_DIR, TerminalProgress
+from utils.logging import safe_print
 
 
 def _option_value(argv: list[str], option: str) -> str | None:
@@ -40,10 +49,14 @@ def _selected_runtime_modules(argv: list[str] | None = None) -> tuple[str, ...]:
     modules = ["cv2", "numpy"]
     if needs_yolo_body(body_backend, enable_fallbacks):
         modules.extend(["torch", "torchvision", "ultralytics"])
+    if needs_rtmpose_body(body_backend):
+        modules.extend(["rtmlib", "onnxruntime"])
     if needs_onnx_hand(hand_backend, enable_fallbacks):
         modules.append("onnxruntime")
     if needs_mediapipe(body_backend, hand_backend, enable_fallbacks):
         modules.append("mediapipe")
+    if "--calibrate-cameras" in tokens or "--triangulate-3d" in tokens:
+        modules.append("aniposelib")
 
     return tuple(dict.fromkeys(module for module in modules if module in MODULE_TO_PACKAGE))
 
@@ -85,12 +98,12 @@ def ensure_runtime_ready(*, persist_cudnn_path: bool = True, check_only: bool = 
 
     if packages_to_install and not check_only:
         progress.break_line()
-        print(f"Preparing runtime dependencies in {VENDOR_DIR}...")
-        print(f"Installing only missing packages: {', '.join(packages_to_install)}")
+        safe_print(f"Preparing runtime dependencies in {VENDOR_DIR}...")
+        safe_print(f"Installing only missing packages: {', '.join(packages_to_install)}")
         install_packages(packages_to_install)
     elif packages_to_install and check_only:
         progress.break_line()
-        print(f"Missing packages (--check-only): {', '.join(packages_to_install)}")
+        safe_print(f"Missing packages (--check-only): {', '.join(packages_to_install)}")
 
     progress.advance("Running final verification")
     report = inspect_runtime()
@@ -112,10 +125,10 @@ def ensure_runtime_ready(*, persist_cudnn_path: bool = True, check_only: bool = 
 
     if report.path_updates:
         joined_paths = ", ".join(str(path) for path in report.path_updates)
-        print(f"Updated CUDA/cuDNN PATH entries: {joined_paths}")
+        safe_print(f"Updated CUDA/cuDNN PATH entries: {joined_paths}")
 
     for warning in dedupe_warning_messages(warnings):
-        print(f"Runtime warning: {warning}")
+        safe_print(f"Runtime warning: {warning}")
 
 
 def _build_cli_parser() -> argparse.ArgumentParser:
@@ -143,10 +156,10 @@ def main() -> int:
             check_only=args.check_only,
         )
     except RuntimeError as exc:
-        print(f"Runtime bootstrap failed: {exc}")
+        safe_print(f"Runtime bootstrap failed: {exc}")
         return 1
     except subprocess.CalledProcessError as exc:
-        print(f"Dependency installation failed with exit code {exc.returncode}.")
+        safe_print(f"Dependency installation failed with exit code {exc.returncode}.")
         return exc.returncode or 1
 
     return 0

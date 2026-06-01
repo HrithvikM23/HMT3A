@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-import os
-import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from utils.logging import default_run_log_path, install_safe_stdio
+
+install_safe_stdio()
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer
 from PySide6.QtGui import QFont, QIcon, QPixmap
@@ -33,37 +34,141 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTabWidget,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from app.launcher_support import (
+    APP_TITLE,
+    APP_USER_MODEL_ID,
+    COLOR_PRESETS,
+    MANAGED_DESTS,
+    app_icon_path,
+    default_text,
+    installer_python_path,
+    quote,
+    tile_text,
+)
 from core.cli import build_parser
 
-
-APP_TITLE = "Kinara"
-APP_USER_MODEL_ID = "Kinara.Kinara.Launcher"
-COLOR_PRESETS = (
-    "black",
-    "orange",
-    "blue",
-    "gray",
-    "silver",
-    "red",
-    "green",
-    "yellow",
-    "purple",
-    "pink",
-    "brown",
-    "white",
+ADVANCED_CATEGORY_ORDER = (
+    "Runtime",
+    "Model",
+    "RTMPose",
+    "Legacy YOLO",
+    "Hands",
+    "Tracking",
+    "Calibration",
+    "Output",
+    "Visuals",
+    "Smoothing",
+    "Cleanup",
 )
-MANAGED_DESTS = {
-    "source",
-    "output",
-    "output_dir",
-    "max_people",
-    "identity_hints",
-    "no_preview",
+
+ADVANCED_CATEGORY_BY_DEST = {
+    "config": "Runtime",
+    "dry_run": "Runtime",
+    "runtime_check": "Runtime",
+    "benchmark_frames": "Runtime",
+    "profile": "Model",
+    "landmark_backend": "Model",
+    "body_backend": "Model",
+    "hand_backend": "Model",
+    "backend_fallbacks": "Model",
+    "model": "Model",
+    "body_input_size": "Model",
+    "processing_width": "Model",
+    "rtmpose_mode": "RTMPose",
+    "rtmpose_backend": "RTMPose",
+    "rtmpose_device": "RTMPose",
+    "rtmpose_det_frequency": "RTMPose",
+    "rtmpose_tracking": "RTMPose",
+    "yolo_fast_preset": "Legacy YOLO",
+    "body_iou_threshold": "Legacy YOLO",
+    "yolo_tracker": "Legacy YOLO",
+    "yolo_device": "Legacy YOLO",
+    "yolo_half": "Legacy YOLO",
+    "yolo_fuse": "Legacy YOLO",
+    "yolo_warmup": "Legacy YOLO",
+    "yolo_person_class_filter": "Legacy YOLO",
+    "hand_model_variant": "Hands",
+    "hand_model": "Hands",
+    "hand_input_name": "Hands",
+    "hand_input_size": "Hands",
+    "hand_det_threshold": "Hands",
+    "hand_kp_threshold": "Hands",
+    "hand_box_min_size": "Hands",
+    "hand_box_scale": "Hands",
+    "hand_detect_interval": "Hands",
+    "hand_crop_retries": "Hands",
+    "person_box_scale": "Tracking",
+    "person_track_hold_frames": "Tracking",
+    "person_match_threshold": "Tracking",
+    "person_cross_wrist_ratio": "Tracking",
+    "body_conf_threshold": "Tracking",
+    "body_detect_interval": "Tracking",
+    "body_hold_frames": "Tracking",
+    "hand_hold_frames": "Tracking",
+    "hold_confidence_decay": "Tracking",
+    "camera_calibration": "Calibration",
+    "calibration_3d": "Calibration",
+    "triangulate_3d": "Calibration",
+    "triangulation_min_cameras": "Calibration",
+    "triangulation_use_outlier_rejection": "Calibration",
+    "triangulation_max_cameras_to_drop": "Calibration",
+    "triangulation_reprojection_error": "Calibration",
+    "triangulation_max_error": "Calibration",
+    "triangulation_smoothing_alpha": "Calibration",
+    "sync_offsets": "Calibration",
+    "fused_depth_scale": "Calibration",
+    "single_camera_depth": "Calibration",
+    "calibrate_cameras": "Calibration",
+    "calibration_output": "Calibration",
+    "charuco_squares_x": "Calibration",
+    "charuco_squares_y": "Calibration",
+    "charuco_square_size": "Calibration",
+    "charuco_marker_scale": "Calibration",
+    "charuco_marker_bits": "Calibration",
+    "charuco_dict_size": "Calibration",
+    "charuco_legacy_pattern": "Calibration",
+    "charuco_detection_strictness": "Calibration",
+    "providers": "Output",
+    "osc_host": "Output",
+    "osc_port": "Output",
+    "osc_enabled": "Output",
+    "preview_title": "Output",
+    "fallback_fps": "Output",
+    "output_fourcc": "Output",
+    "fps_log_interval": "Output",
+    "fps_overlay_enabled": "Output",
+    "auto_performance": "Output",
+    "body_line_color": "Visuals",
+    "body_point_color": "Visuals",
+    "hand_box_color": "Visuals",
+    "hand_line_color": "Visuals",
+    "hand_point_color": "Visuals",
+    "body_line_thickness": "Visuals",
+    "body_point_radius": "Visuals",
+    "hand_box_thickness": "Visuals",
+    "hand_line_thickness": "Visuals",
+    "hand_point_radius": "Visuals",
+    "body_smoothing_alpha": "Smoothing",
+    "hand_smoothing_alpha": "Smoothing",
+    "body_constraints": "Smoothing",
+    "body_length_smoothing_alpha": "Smoothing",
+    "body_length_correction": "Smoothing",
+    "export_cleanup": "Cleanup",
+    "export_cleanup_smoothing_alpha": "Cleanup",
+    "export_cleanup_max_velocity": "Cleanup",
+    "foot_lock": "Cleanup",
+    "foot_lock_velocity": "Cleanup",
+    "foot_lock_max_lift": "Cleanup",
 }
+
+
+def advanced_category(dest: str) -> str:
+    return ADVANCED_CATEGORY_BY_DEST.get(dest, "Runtime")
 
 
 def main() -> None:
@@ -80,7 +185,7 @@ def main() -> None:
     app.setApplicationName(APP_TITLE)
     app.setApplicationDisplayName(APP_TITLE)
     app.setOrganizationName("Kinara")
-    icon_path = app_icon_path()
+    icon_path = app_icon_path(PROJECT_ROOT)
     if icon_path is not None:
         app.setWindowIcon(load_app_icon(icon_path))
     window = KinaraLauncher()
@@ -92,7 +197,7 @@ class KinaraLauncher(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_TITLE)
-        icon_path = app_icon_path()
+        icon_path = app_icon_path(PROJECT_ROOT)
         if icon_path is not None:
             self.setWindowIcon(load_app_icon(icon_path))
         self.resize(1380, 840)
@@ -102,6 +207,13 @@ class KinaraLauncher(QMainWindow):
         self.process: QProcess | None = None
         self.person_color_controls: list[QComboBox] = []
         self.advanced_controls: dict[str, tuple[argparse.Action, QWidget]] = {}
+        self.advanced_rows: dict[str, QFrame] = {}
+        self.advanced_section_buttons: dict[str, QToolButton] = {}
+        self.advanced_section_bodies: dict[str, QWidget] = {}
+        self.advanced_section_frames: dict[str, QFrame] = {}
+        self.advanced_row_texts: dict[str, str] = {}
+        self.advanced_search: QLineEdit | None = None
+        self.python_path: QLineEdit | None = None
         self.preview_frame_path = self._runtime_dir() / "preview.jpg"
         self._last_preview_mtime = 0.0
         self._preview_pixmap: QPixmap | None = None
@@ -162,6 +274,9 @@ class KinaraLauncher(QMainWindow):
         self.start_button = QPushButton("Start")
         self.start_button.setObjectName("primaryButton")
         self.start_button.clicked.connect(self.start_run)
+        self.check_button = QPushButton("Check Runtime")
+        self.check_button.setObjectName("secondaryButton")
+        self.check_button.clicked.connect(self.check_runtime)
         self.stop_button = QPushButton("Stop")
         self.stop_button.setObjectName("dangerButton")
         self.stop_button.clicked.connect(self.stop_run)
@@ -171,6 +286,7 @@ class KinaraLauncher(QMainWindow):
         self.status = QLabel("Idle")
         self.status.setObjectName("status")
         controls.addWidget(self.start_button)
+        controls.addWidget(self.check_button)
         controls.addWidget(self.stop_button)
         controls.addWidget(self.kill_button)
         controls.addWidget(self.status)
@@ -284,28 +400,119 @@ class KinaraLauncher(QMainWindow):
     def _advanced_tab(self) -> QWidget:
         tab = QWidget()
         outer = QVBoxLayout(tab)
-        hint = QLabel("Values changed here apply only until this launcher closes.")
+        hint = QLabel("Settings changed here apply to this launcher session.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         outer.addWidget(hint)
 
+        self.advanced_search = QLineEdit()
+        self.advanced_search.setPlaceholderText("Search advanced settings")
+        self.advanced_search.textChanged.connect(self._filter_advanced_controls)
+        outer.addWidget(self.advanced_search)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         content = QWidget()
-        self.advanced_layout = QVBoxLayout(content)
-        self.advanced_layout.setSpacing(10)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(4, 4, 4, 4)
+        content_layout.setSpacing(8)
         scroll.setWidget(content)
         outer.addWidget(scroll, 1)
+
+        category_layouts: dict[str, QVBoxLayout] = {}
+        for category_name in ADVANCED_CATEGORY_ORDER:
+            section, section_layout = self._advanced_section(category_name)
+            category_layouts[category_name] = section_layout
+            content_layout.addWidget(section)
+
+        category_layouts["Runtime"].addWidget(self._python_runtime_control())
 
         parser = build_parser()
         for action in parser._actions:
             if not action.option_strings or action.dest in MANAGED_DESTS or action.dest == "help":
                 continue
-            self._add_advanced_control(action)
-        self.advanced_layout.addStretch(1)
+            category = advanced_category(action.dest)
+            self._add_advanced_control(action, category_layouts[category])
+        for layout in category_layouts.values():
+            layout.addStretch(1)
+        content_layout.addStretch(1)
         return tab
 
-    def _add_advanced_control(self, action: argparse.Action) -> None:
+    def _advanced_section(self, title: str) -> tuple[QFrame, QVBoxLayout]:
+        section = QFrame()
+        section.setObjectName("accordionSection")
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        header = QToolButton()
+        header.setObjectName("accordionHeader")
+        header.setText(title)
+        header.setCheckable(True)
+        header.setChecked(title == "Runtime")
+        header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        header.setArrowType(Qt.ArrowType.DownArrow if header.isChecked() else Qt.ArrowType.RightArrow)
+        layout.addWidget(header)
+
+        body = QWidget()
+        body.setObjectName("accordionBody")
+        body.setVisible(header.isChecked())
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(8, 8, 8, 8)
+        body_layout.setSpacing(10)
+        layout.addWidget(body)
+
+        header.toggled.connect(lambda checked, section_title=title: self._toggle_advanced_section(section_title, checked))
+        self.advanced_section_buttons[title] = header
+        self.advanced_section_bodies[title] = body
+        self.advanced_section_frames[title] = section
+        return section, body_layout
+
+    def _toggle_advanced_section(self, title: str, checked: bool) -> None:
+        if self.advanced_search is not None and self.advanced_search.text().strip():
+            return
+        button = self.advanced_section_buttons[title]
+        body = self.advanced_section_bodies[title]
+        button.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+        body.setVisible(checked)
+        if not checked:
+            return
+        for other_title, other_button in self.advanced_section_buttons.items():
+            if other_title == title or not other_button.isChecked():
+                continue
+            other_button.blockSignals(True)
+            other_button.setChecked(False)
+            other_button.setArrowType(Qt.ArrowType.RightArrow)
+            other_button.blockSignals(False)
+            self.advanced_section_bodies[other_title].setVisible(False)
+
+    def _python_runtime_control(self) -> QFrame:
+        row = QFrame()
+        row.setObjectName("advancedRow")
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(10, 8, 10, 8)
+        label = QLabel("Python 3.11 runtime")
+        label.setObjectName("advancedLabel")
+        layout.addWidget(label)
+
+        picker = QHBoxLayout()
+        self.python_path = QLineEdit(installer_python_path())
+        self.python_path.setPlaceholderText(r"C:\Users\...\Python311 or ...\Python311\python.exe")
+        browse = QPushButton("Browse")
+        browse.setObjectName("secondaryButton")
+        browse.clicked.connect(self.choose_python_runtime)
+        picker.addWidget(self.python_path, 1)
+        picker.addWidget(browse)
+        layout.addLayout(picker)
+
+        help_label = QLabel("Used for installing/checking runtime packages. A folder ending in Python311 is accepted.")
+        help_label.setObjectName("hint")
+        help_label.setWordWrap(True)
+        layout.addWidget(help_label)
+        self.advanced_row_texts["python_runtime"] = "python 3.11 runtime installer package dependencies"
+        return row
+
+    def _add_advanced_control(self, action: argparse.Action, parent_layout: QVBoxLayout) -> None:
         row = QFrame()
         row.setObjectName("advancedRow")
         layout = QVBoxLayout(row)
@@ -327,6 +534,8 @@ class KinaraLauncher(QMainWindow):
         else:
             control = QLineEdit(default_text(action.default))
         layout.addWidget(control)
+        if action.dest == "landmark_backend" and isinstance(control, QComboBox):
+            control.currentTextChanged.connect(self._sync_backend_controls)
 
         if action.help:
             help_label = QLabel(action.help)
@@ -334,8 +543,51 @@ class KinaraLauncher(QMainWindow):
             help_label.setWordWrap(True)
             layout.addWidget(help_label)
 
-        self.advanced_layout.addWidget(row)
+        parent_layout.addWidget(row)
         self.advanced_controls[action.dest] = (action, control)
+        self.advanced_rows[action.dest] = row
+        self.advanced_row_texts[action.dest] = " ".join(
+            part
+            for part in (
+                action.dest.replace("_", " "),
+                " ".join(action.option_strings),
+                str(action.help or ""),
+            )
+            if part
+        ).lower()
+        self._sync_backend_controls()
+
+    def _filter_advanced_controls(self, query: str) -> None:
+        normalized_query = query.strip().lower()
+        if not normalized_query:
+            for row in self.advanced_rows.values():
+                row.setVisible(True)
+            for section_title, frame in self.advanced_section_frames.items():
+                frame.setVisible(True)
+                button = self.advanced_section_buttons[section_title]
+                self.advanced_section_bodies[section_title].setVisible(button.isChecked())
+                button.setArrowType(Qt.ArrowType.DownArrow if button.isChecked() else Qt.ArrowType.RightArrow)
+            return
+
+        matched_sections: set[str] = set()
+        for dest, row in self.advanced_rows.items():
+            matched = normalized_query in self.advanced_row_texts.get(dest, "")
+            row.setVisible(matched)
+            if matched:
+                matched_sections.add(advanced_category(dest))
+
+        runtime_row = self.python_path.parentWidget() if self.python_path is not None else None
+        if isinstance(runtime_row, QFrame):
+            runtime_matched = normalized_query in self.advanced_row_texts.get("python_runtime", "")
+            runtime_row.setVisible(runtime_matched)
+            if runtime_matched:
+                matched_sections.add("Runtime")
+
+        for section_title, frame in self.advanced_section_frames.items():
+            matched = section_title in matched_sections or normalized_query in section_title.lower()
+            frame.setVisible(matched)
+            self.advanced_section_bodies[section_title].setVisible(matched)
+            self.advanced_section_buttons[section_title].setArrowType(Qt.ArrowType.DownArrow if matched else Qt.ArrowType.RightArrow)
 
     def use_camera(self) -> None:
         self.sources = ["0"]
@@ -369,6 +621,20 @@ class KinaraLauncher(QMainWindow):
         path = QFileDialog.getExistingDirectory(self, "Choose output destination", self.destination.text())
         if path:
             self.destination.setText(path)
+
+    def choose_python_runtime(self) -> None:
+        start_dir = ""
+        if self.python_path is not None and self.python_path.text().strip():
+            current = Path(self.python_path.text().strip())
+            start_dir = str(current if current.is_dir() else current.parent)
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose Python 3.11 executable",
+            start_dir,
+            "Python executable (python.exe);;All files (*.*)",
+        )
+        if path and self.python_path is not None:
+            self.python_path.setText(path)
 
     def _refresh_sources(self) -> None:
         self.source_list.clear()
@@ -447,7 +713,10 @@ class KinaraLauncher(QMainWindow):
 
     def _advanced_args(self) -> list[str]:
         args: list[str] = []
+        wholebody_selected = self._wholebody_selected()
         for action, control in self.advanced_controls.values():
+            if wholebody_selected and action.dest in {"body_backend", "hand_backend"}:
+                continue
             option = action.option_strings[-1]
             if isinstance(action, argparse._StoreTrueAction):
                 checked = isinstance(control, QCheckBox) and control.isChecked()
@@ -466,6 +735,20 @@ class KinaraLauncher(QMainWindow):
                 args.extend([option, value])
         return args
 
+    def _wholebody_selected(self) -> bool:
+        control = self.advanced_controls.get("landmark_backend", (None, None))[1]
+        return isinstance(control, QComboBox) and control.currentText() == "rtmpose-wholebody"
+
+    def _sync_backend_controls(self) -> None:
+        wholebody_selected = self._wholebody_selected()
+        for dest in ("body_backend", "hand_backend"):
+            control = self.advanced_controls.get(dest, (None, None))[1]
+            row = self.advanced_rows.get(dest)
+            if control is not None:
+                control.setEnabled(not wholebody_selected)
+            if row is not None:
+                row.setEnabled(not wholebody_selected)
+
     def start_run(self) -> None:
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
             show_message(self, QMessageBox.Icon.Information, "Kinara is already running.")
@@ -478,21 +761,37 @@ class KinaraLauncher(QMainWindow):
             return
 
         command = self._runner_command(self.build_args())
+        self._start_process(command, enable_preview_stream=True, status_text="Running")
+
+    def check_runtime(self) -> None:
+        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
+            show_message(self, QMessageBox.Icon.Information, "Kinara is already running.")
+            return
+        command = self._runner_command([*self._advanced_args(), "--runtime-check", "--no-preview"])
+        self._start_process(command, enable_preview_stream=False, status_text="Checking")
+
+    def _start_process(self, command: list[str], *, enable_preview_stream: bool, status_text: str) -> None:
+        log_path = default_run_log_path("kinara_run", root=Path(self._app_dir()) / ".kinara_logs")
         self.log.clear()
         self.log.append("> " + " ".join(quote(part) for part in command))
-        self.status.setText("Running")
-        self._prepare_preview_stream()
-        self._show_live_preview()
-        self.preview_timer.start()
+        self.log.append(f"Log file: {log_path}")
+        self.status.setText(status_text)
+        if enable_preview_stream:
+            self._prepare_preview_stream()
+            self._show_live_preview()
+            self.preview_timer.start()
+        else:
+            self.preview_timer.stop()
 
         self.process = QProcess(self)
         self.process.setWorkingDirectory(self._app_dir())
         self.process.setProgram(command[0])
         self.process.setArguments(command[1:])
         environment = QProcessEnvironment.systemEnvironment()
-        installer = installer_python_path()
+        installer = self._selected_python_runtime()
         if installer:
             environment.insert("KINARA_PYTHON", installer)
+        environment.insert("KINARA_LOG_FILE", str(log_path))
         environment.insert("KINARA_PREVIEW_FRAME", str(self.preview_frame_path))
         environment.insert("KINARA_PREVIEW_INTERVAL", "2")
         environment.insert("KINARA_PREVIEW_QUALITY", "82")
@@ -503,6 +802,17 @@ class KinaraLauncher(QMainWindow):
         self.process.finished.connect(self._process_finished)
         self.process.errorOccurred.connect(self._process_error)
         self.process.start()
+
+    def _selected_python_runtime(self) -> str:
+        if self.python_path is None:
+            return installer_python_path()
+        value = self.python_path.text().strip()
+        if not value:
+            return ""
+        path = Path(value)
+        if path.is_dir():
+            path = path / "python.exe"
+        return str(path)
 
     def stop_run(self) -> None:
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
@@ -618,58 +928,6 @@ def clear_layout(layout, preserve=None) -> None:
             clear_layout(child_layout, preserve=preserved_widgets)
 
 
-def default_text(value: object) -> str:
-    if value in (None, argparse.SUPPRESS):
-        return ""
-    if isinstance(value, tuple):
-        return ",".join(str(item) for item in value)
-    return str(value)
-
-
-def tile_text(source: str) -> str:
-    if source == "No source selected":
-        return "Add files or choose camera input"
-    if source == "UDP_DEVELOPMENT_MODE":
-        return "Waiting for UDP stream - development mode"
-    if source.isdigit():
-        return f"Local camera {source}"
-    return Path(source).name
-
-
-def quote(value: str) -> str:
-    return f'"{value}"' if " " in value else value
-
-
-def installer_python_path() -> str:
-    candidates = [
-        os.environ.get("KINARA_PYTHON", ""),
-        r"C:\Program Files\Blender Foundation\Blender 5.0\5.0\python\bin\python.exe",
-        sys.executable if not getattr(sys, "frozen", False) else "",
-    ]
-    for candidate in candidates:
-        if candidate and Path(candidate).exists():
-            return candidate
-    return ""
-
-
-def app_icon_path() -> Path | None:
-    roots = []
-    if getattr(sys, "frozen", False):
-        roots.append(Path(sys.executable).resolve().parent)
-        bundle_root = getattr(sys, "_MEIPASS", None)
-        if bundle_root:
-            roots.append(Path(bundle_root))
-    else:
-        roots.append(PROJECT_ROOT)
-
-    for root in roots:
-        for relative in (Path("assets") / "kinara.ico", Path("assets") / "kinara-mark.png", Path("assets") / "kinara.png"):
-            candidate = root / relative
-            if candidate.exists():
-                return candidate
-    return None
-
-
 def load_app_icon(path: Path) -> QIcon:
     icon = QIcon(str(path))
     if path.suffix.lower() == ".ico":
@@ -691,7 +949,7 @@ def show_message(parent: QWidget, icon: QMessageBox.Icon, text: str) -> None:
     message.setWindowTitle(APP_TITLE)
     message.setText(text)
     message.setIcon(icon)
-    icon_path = app_icon_path()
+    icon_path = app_icon_path(PROJECT_ROOT)
     if icon_path is not None:
         message.setWindowIcon(load_app_icon(icon_path))
     message.exec()
@@ -834,6 +1092,30 @@ QTabBar::tab {
 QTabBar::tab:selected {
     background: #344055;
     color: #ffffff;
+}
+QFrame#accordionSection {
+    background: transparent;
+    border: 0;
+}
+QWidget#accordionBody {
+    background: transparent;
+}
+QToolButton#accordionHeader {
+    background: #202733;
+    color: #d7deeb;
+    border: 1px solid #303848;
+    border-radius: 10px;
+    padding: 9px 10px;
+    margin-top: 4px;
+    font-weight: 700;
+    text-align: left;
+}
+QToolButton#accordionHeader:checked {
+    background: #344055;
+    color: #ffffff;
+}
+QToolButton#accordionHeader:hover {
+    background: #303a4d;
 }
 QFrame#advancedRow {
     background: #11161f;

@@ -66,7 +66,7 @@ def temporal_distance(points: list[Point], previous_points: list[Point] | None) 
 
     distances = [
         math.hypot(float(point[0] - previous[0]), float(point[1] - previous[1]))
-        for point, previous in zip(points, previous_points)
+        for point, previous in zip(points, previous_points, strict=True)
         if point[2] > 0.0 and previous[2] > 0.0
     ]
     if not distances:
@@ -126,7 +126,7 @@ def blend_with_prediction(
         return detected_points
 
     blended: list[Point] = []
-    for detected, predicted in zip(detected_points, predicted_points):
+    for detected, predicted in zip(detected_points, predicted_points, strict=True):
         dx = detected[0] - predicted[0]
         dy = detected[1] - predicted[1]
         distance = math.hypot(float(dx), float(dy))

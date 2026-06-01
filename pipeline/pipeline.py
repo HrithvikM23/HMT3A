@@ -6,7 +6,12 @@ from core.config import BODY_EDGES, BODY_KEYPOINTS, HAND_EDGES, WRIST_TO_ELBOW
 from utils.body_constraints import BodyKinematicConstraints
 from utils.body_geometry import derive_foot_points
 from utils.hand_constraints import enforce_hand_constraints
-from utils.hand_fallback import anchor_hand_to_wrist, generate_default_hand, has_usable_hand_detection, is_hand_detection_valid
+from utils.hand_fallback import (
+    anchor_hand_to_wrist,
+    generate_default_hand,
+    has_usable_hand_detection,
+    is_hand_detection_valid,
+)
 from utils.hand_tracking import blend_with_prediction, hand_detection_score, predict_hand_payload
 from utils.normalize import build_hand_box
 from utils.payloads import HandPayload
@@ -156,7 +161,12 @@ class PoseHandPipeline:
             raw_hand_in_inference_space = True
             hand_box = box
             predicted_hand = self._predict_hand(side, wrist_output, elbow_output)
-            if run_hand_model:
+            if self.config.hand_backend == "rtmpose-wholebody":
+                wholebody_hand = self.runner.detect_wholebody_hand(side, body_points)
+                if wholebody_hand is not None:
+                    hand_box = wholebody_hand["box"]
+                    raw_hand_points = wholebody_hand["points"]
+            elif run_hand_model:
                 detected_hand = self._detect_best_hand(frame, side, wrist_point, elbow_point, box, output_scale)
                 if detected_hand is not None:
                     hand_box, raw_hand_points, raw_hand_depths = detected_hand

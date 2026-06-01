@@ -4,6 +4,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from utils.logging import safe_print
 
 PROJECT_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 VENDOR_DIR = PROJECT_ROOT / f".vendor_py{sys.version_info.major}{sys.version_info.minor}"
@@ -62,6 +63,8 @@ MODULE_TO_PACKAGE = {
     "ultralytics": "ultralytics",
     "onnxruntime": "onnxruntime",
     "mediapipe": "mediapipe==0.10.21",
+    "rtmlib": "rtmlib",
+    "aniposelib": "aniposelib>=0.7,<0.8",
 }
 
 
@@ -96,8 +99,7 @@ class TerminalProgress:
         bar = "#" * filled + "-" * (self.width - filled)
         line = f"\r[{bar}] {self.current_step}/{self.total_steps} {int(ratio * 100):3d}% {message}"
         padding = max(0, self._last_render_length - len(line))
-        sys.stdout.write(line + (" " * padding))
-        sys.stdout.flush()
+        safe_print(line + (" " * padding), end="")
         self._last_render_length = len(line)
 
     def note(self, message: str) -> None:
@@ -108,8 +110,7 @@ class TerminalProgress:
         self._render(message)
 
     def break_line(self) -> None:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        safe_print()
         self._last_render_length = 0
 
     def finish(self, message: str) -> None:

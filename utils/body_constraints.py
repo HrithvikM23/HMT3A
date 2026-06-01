@@ -4,7 +4,6 @@ import math
 
 from utils.skeleton import Point
 
-
 BODY_SEGMENT_GROUPS = {
     "upper_arm": ((5, 7), (6, 8)),
     "forearm": ((7, 9), (8, 10)),

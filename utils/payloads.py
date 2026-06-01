@@ -4,7 +4,6 @@ from typing import NotRequired, TypedDict
 
 from utils.skeleton import JointMap, Point
 
-
 Box = tuple[int, int, int, int]
 
 

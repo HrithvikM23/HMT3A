@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import time
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -8,10 +10,10 @@ import cv2
 from camera.capture import VideoInputSource, VideoOutputWriter
 from core.cli import InputAssignment
 from core.config import PipelineConfig
+from core.runtime_config import build_fused_config, prepare_runtime_config
 from inference.rtmpose import ONNXPoseHandRunner
 from network.osc_sender import OSCSender
 from pipeline.pipeline import PoseHandPipeline
-from core.runtime_config import build_fused_config, prepare_runtime_config
 from runners.common import (
     box_from_body_points,
     build_person_payload,
@@ -24,14 +26,17 @@ from runners.fused_alignment import align_people_across_cameras
 from utils.exports import build_joint_map, export_multi_person_fbx_bundle, export_multi_person_json
 from utils.fps import FpsMeter, draw_fps_overlay
 from utils.fusion import estimate_joint_depths, fuse_body_views, load_camera_calibrations
+from utils.logging import log_info
 from utils.motion_cleanup import cleanup_multi_person_frames
 from utils.multi_person import MultiPersonTracker
 from utils.payloads import HandPayload, PersonPayload
 from utils.preview_stream import PreviewFrameSink
+from utils.run_metadata import build_run_metadata, write_run_metadata
 from utils.smoothing import LandmarkSmoother
 from utils.triangulation import (
-    calibrated_backend_available,
     apply_triangulated_overrides,
+    calibrated_backend_available,
+    export_freemocap_style_output,
     triangulate_observation_frames,
     triangulation_metadata,
 )
@@ -82,6 +87,7 @@ def run_fused_assignments(
     export_fps = config.fallback_fps
     fps_meter = FpsMeter("fused", config.fps_log_interval)
     preview_sink = PreviewFrameSink()
+    started_at = time.perf_counter()
     try:
         min_offset = min((config.sync_offsets.get(assignment.label.upper(), 0) for assignment in assignments), default=0)
         for assignment in assignments:
@@ -112,6 +118,8 @@ def run_fused_assignments(
         fused_renderers: dict[str, PoseHandPipeline] = {}
 
         while True:
+            if config.benchmark_frames and frame_index >= config.benchmark_frames:
+                break
             frames_by_label: dict[str, Any] = {}
             for label, source in sources.items():
                 ok, frame = source.read()
@@ -189,12 +197,31 @@ def run_fused_assignments(
             metadata=metadata,
         )
         exported_fbx_paths = export_multi_person_fbx_bundle(config.fbx_output_path, export_fps, cleaned_motion_frames)
-        print_saved_paths(config.output_path, config.json_output_path, *exported_fbx_paths)
+        write_run_metadata(
+            config.metadata_output_path,
+            build_run_metadata(
+                config,
+                mode="fused_multi_person",
+                fps=export_fps,
+                frame_count=len(cleaned_motion_frames),
+                extra=metadata,
+            ),
+        )
+        elapsed = max(time.perf_counter() - started_at, 1e-9)
+        log_info(
+            f"Processed {len(cleaned_motion_frames)} fused frames in {elapsed:.2f}s "
+            f"({len(cleaned_motion_frames) / elapsed:.2f} FPS)"
+        )
+        print_saved_paths(config.output_path, config.json_output_path, *exported_fbx_paths, config.metadata_output_path)
         return
 
     metadata = _build_fused_metadata("fused", assignments, config)
     if config.enable_3d_triangulation:
-        motion_frames, metadata = _apply_calibrated_triangulation(config, motion_frames, triangulation_frames, metadata)
+        try:
+            motion_frames, metadata = _apply_calibrated_triangulation(config, motion_frames, triangulation_frames, metadata)
+        except RuntimeError as exc:
+            print(f"Error: calibrated 3D export failed: {exc}")
+            return
 
     export_motion_bundle(
         config,
@@ -202,7 +229,19 @@ def run_fused_assignments(
         frames=motion_frames,
         metadata=metadata,
     )
-    print_saved_paths(config.output_path, config.json_output_path, config.fbx_output_path)
+    write_run_metadata(
+        config.metadata_output_path,
+        build_run_metadata(
+            config,
+            mode="fused",
+            fps=export_fps,
+            frame_count=len(motion_frames),
+            extra=metadata,
+        ),
+    )
+    elapsed = max(time.perf_counter() - started_at, 1e-9)
+    log_info(f"Processed {len(motion_frames)} fused frames in {elapsed:.2f}s ({len(motion_frames) / elapsed:.2f} FPS)")
+    print_saved_paths(config.output_path, config.json_output_path, config.fbx_output_path, config.metadata_output_path)
 
 
 def _apply_calibrated_triangulation(
@@ -212,10 +251,9 @@ def _apply_calibrated_triangulation(
     metadata: dict[str, object],
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     if config.calibration_3d_path is None:
-        return motion_frames, metadata
+        raise RuntimeError("--triangulate-3d requires --calibration-3d.")
     if not calibrated_backend_available():
-        print("Warning: calibrated 3D backend is not installed; keeping heuristic fused depth.")
-        return motion_frames, metadata
+        raise RuntimeError("calibrated 3D backend is not installed.")
 
     try:
         result = triangulate_observation_frames(
@@ -231,12 +269,18 @@ def _apply_calibrated_triangulation(
             smoothing_alpha=config.triangulation_smoothing_alpha,
         )
     except Exception as exc:
-        print(f"Warning: calibrated 3D triangulation failed; keeping heuristic fused depth. Details: {exc}")
-        return motion_frames, metadata
+        raise RuntimeError(f"triangulation failed: {exc}") from exc
 
     updated_metadata = dict(metadata)
     updated_metadata["triangulation_3d"] = triangulation_metadata(result)
+    freemocap_output_root = _freemocap_output_root(config)
+    updated_metadata["freemocap_style_output"] = export_freemocap_style_output(freemocap_output_root, result)
     return apply_triangulated_overrides(motion_frames, result), updated_metadata
+
+
+def _freemocap_output_root(config: PipelineConfig) -> Path:
+    assert config.output_path is not None
+    return config.output_path.with_name(f"{config.output_path.stem} freemocap")
 
 
 def _apply_multi_person_triangulation(

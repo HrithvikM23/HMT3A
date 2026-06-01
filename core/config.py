@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+
 class LiveUdpDefaults:
     HOST = "127.0.0.1"
     PORT = 9000
@@ -67,6 +68,13 @@ class PipelineConfig:
     yolo_fuse: bool = True
     yolo_warmup: bool = True
     yolo_person_class_filter: bool = True
+    rtmpose_mode: str = "balanced"
+    rtmpose_backend: str = "onnxruntime"
+    rtmpose_device: str = "cuda"
+    rtmpose_det_frequency: int = 1
+    rtmpose_tracking: bool = True
+    rtmpose_wholebody_left_hand_start: int = 91
+    rtmpose_wholebody_right_hand_start: int = 112
     body_detect_interval: int = 1
     hand_detect_interval: int = 1
     hand_crop_retries: int = 3
@@ -81,6 +89,7 @@ class PipelineConfig:
     export_foot_lock_max_lift: float = 16.0
     fps_log_interval: float = 0.0
     fps_overlay_enabled: bool = True
+    benchmark_frames: int = 0
     enable_preview: bool = True
     provider_names: tuple[str, ...] = ("CUDAExecutionProvider",)
     preview_window_title: str = "Pose + Hand Landmarks"
@@ -109,6 +118,7 @@ class PipelineConfig:
     rendered_output_path: Path = field(init=False)
     fbx_output_path: Path = field(init=False)
     json_output_path: Path = field(init=False)
+    metadata_output_path: Path = field(init=False)
 
     def __post_init__(self) -> None:
         if self.body_model_path is not None and isinstance(self.body_model_path, Path):
@@ -150,6 +160,7 @@ class PipelineConfig:
         self.rendered_output_path = resolved_output_directory / f"{base_name} rendered-{self.run_index}{self.video_extension}"
         self.fbx_output_path = resolved_output_directory / f"{base_name} fbx-{self.run_index}.fbx"
         self.json_output_path = resolved_output_directory / f"{base_name} json-{self.run_index}.json"
+        self.metadata_output_path = resolved_output_directory / f"{base_name} metadata-{self.run_index}.json"
         self.output_path = self.rendered_output_path
         self.output_fourcc = self.output_fourcc[:4].ljust(4)
 
@@ -162,6 +173,7 @@ class PipelineConfig:
                 output_directory / f"{base_name} rendered-{run_index}{self.video_extension}",
                 output_directory / f"{base_name} fbx-{run_index}.fbx",
                 output_directory / f"{base_name} json-{run_index}.json",
+                output_directory / f"{base_name} metadata-{run_index}.json",
             )
             if not any(path.exists() for path in sibling_paths):
                 return run_index

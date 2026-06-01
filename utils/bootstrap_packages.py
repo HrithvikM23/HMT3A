@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -12,23 +13,44 @@ except ImportError:  # pragma: no cover
     import importlib_metadata  # type: ignore[no-redef]
 
 from utils.bootstrap_paths import dedupe_paths, prepend_pythonpath, prepend_sys_path
-from utils.bootstrap_state import MODULE_TO_PACKAGE, ModuleStatus, RuntimeReport, VENDOR_DIR
+from utils.bootstrap_state import MODULE_TO_PACKAGE, VENDOR_DIR, ModuleStatus, RuntimeReport
+from utils.logging import safe_print
+
+PRUNED_VENDOR_DISTRIBUTIONS = ("openxlab",)
+
+
+def _valid_python_executable(candidate: str) -> str | None:
+    if not candidate:
+        return None
+    path = Path(candidate)
+    if path.is_dir():
+        path = path / "python.exe"
+    if path.exists() and path.name.lower() == "python.exe":
+        return str(path)
+    return None
 
 
 def installer_python() -> str:
-    candidates = [
+    candidates = (
         os.environ.get("KINARA_PYTHON", ""),
-        r"C:\Program Files\Blender Foundation\Blender 5.0\5.0\python\bin\python.exe",
         getattr(sys, "_base_executable", ""),
         sys.executable,
-    ]
+    )
     for candidate in candidates:
-        if not candidate:
-            continue
-        path = Path(candidate)
-        if path.exists() and path.name.lower() == "python.exe":
-            return str(path)
-    return sys.executable
+        resolved = _valid_python_executable(candidate)
+        if resolved is not None:
+            return resolved
+
+    if os.environ.get("KINARA_ALLOW_BLENDER_PYTHON") == "1":
+        resolved = _valid_python_executable(r"C:\Program Files\Blender Foundation\Blender 5.0\5.0\python\bin\python.exe")
+        if resolved is not None:
+            return resolved
+
+    raise RuntimeError(
+        "No installable Python runtime was found. Run Kinara from a Python environment or set KINARA_PYTHON "
+        "to a python.exe that can run pip. To deliberately use Blender's bundled Python, set "
+        "KINARA_ALLOW_BLENDER_PYTHON=1."
+    )
 
 
 def distribution_installed(distribution_name: str) -> bool:
@@ -39,13 +61,70 @@ def distribution_installed(distribution_name: str) -> bool:
     return True
 
 
+def distribution_version(distribution_name: str) -> str | None:
+    try:
+        return importlib_metadata.version(distribution_name)
+    except importlib_metadata.PackageNotFoundError:
+        return None
+
+
+def protobuf_needs_mediapipe_pin() -> bool:
+    version = distribution_version("protobuf")
+    if version is None:
+        return True
+    try:
+        major = int(version.split(".", 1)[0])
+    except ValueError:
+        return True
+    return major >= 5
+
+
+def prune_vendor_distributions(distribution_names: tuple[str, ...] = PRUNED_VENDOR_DISTRIBUTIONS) -> None:
+    if not VENDOR_DIR.exists():
+        return
+    vendor_root = VENDOR_DIR.resolve()
+    normalized_names = {name.lower().replace("-", "_") for name in distribution_names}
+    for child in VENDOR_DIR.iterdir():
+        normalized_child = child.name.lower().replace("-", "_")
+        if not any(
+            normalized_child == name
+            or normalized_child.startswith(f"{name}-")
+            or normalized_child.startswith(f"{name}.")
+            for name in normalized_names
+        ):
+            continue
+        try:
+            child.resolve().relative_to(vendor_root)
+        except ValueError:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            try:
+                child.unlink()
+            except OSError:
+                pass
+
+
 def module_status(module_name: str) -> ModuleStatus:
     try:
         importlib.invalidate_caches()
         importlib.import_module(module_name)
         return ModuleStatus(module_name=module_name, ok=True)
     except Exception as exc:
-        return ModuleStatus(module_name=module_name, ok=False, error=f"{type(exc).__name__}: {exc}")
+        detail = f"{type(exc).__name__}: {exc}"
+        missing_stdlib_modules = [
+            stdlib_module
+            for stdlib_module in ("timeit", "zoneinfo")
+            if f"No module named '{stdlib_module}'" in detail
+        ]
+        if module_name == "aniposelib" and missing_stdlib_modules:
+            module_list = ", ".join(missing_stdlib_modules)
+            detail += (
+                f" (the packaged Kinara executable is missing Python standard-library module(s): {module_list}; "
+                "rebuild/update the app with the current packaging script)"
+            )
+        return ModuleStatus(module_name=module_name, ok=False, error=detail)
 
 
 def module_group_status(module_names: tuple[str, ...]) -> list[ModuleStatus]:
@@ -71,8 +150,10 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
         packages_to_install.append("ultralytics")
         missing_modules.difference_update({"ultralytics", "torch", "torchvision", "numpy", "cv2"})
 
+    calibration_requested = "aniposelib" in missing_modules
+
     if "cv2" in missing_modules:
-        packages_to_install.append("opencv-python")
+        packages_to_install.append("opencv-contrib-python>=4.9,<4.12" if calibration_requested else "opencv-python")
         missing_modules.discard("cv2")
         missing_modules.discard("numpy")
 
@@ -87,29 +168,74 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
         packages_to_install.append("onnxruntime-gpu")
 
     if "mediapipe" in missing_modules:
-        packages_to_install.append(MODULE_TO_PACKAGE["mediapipe"])
+        packages_to_install.extend([
+            MODULE_TO_PACKAGE["mediapipe"],
+            "protobuf>=4.25.3,<5",
+        ])
         missing_modules.discard("mediapipe")
+    elif any(status.module_name == "mediapipe" and status.ok for status in module_statuses) and protobuf_needs_mediapipe_pin():
+        packages_to_install.append("protobuf>=4.25.3,<5")
+
+    if "rtmlib" in missing_modules:
+        packages_to_install.extend([
+            "rtmlib",
+            "protobuf>=4.25.3,<5",
+        ])
+        missing_modules.discard("rtmlib")
+
+    if "aniposelib" in missing_modules:
+        packages_to_install.extend([
+            "numpy>=1.26,<2.0",
+            "opencv-contrib-python>=4.9,<4.12",
+            "aniposelib>=0.7,<0.8",
+            "protobuf>=4.25.3,<5",
+        ])
+        missing_modules.discard("aniposelib")
+        missing_modules.discard("cv2")
+        missing_modules.discard("numpy")
 
     return packages_to_install
 
 
 def ensure_pip() -> None:
     python = installer_python()
+    env = os.environ.copy()
+    env["PYTHONNOUSERSITE"] = "1"
     completed = subprocess.run(
         [python, "-m", "pip", "--version"],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
         timeout=20,
     )
     if completed.returncode == 0:
         return
 
-    subprocess.run(
-        [python, "-m", "ensurepip", "--upgrade"],
-        check=True,
-        timeout=120,
+    run_logged_subprocess([python, "-m", "ensurepip", "--upgrade"], env=env, timeout=120)
+
+
+def run_logged_subprocess(command: list[str], *, env: dict[str, str], timeout: int | None = None) -> None:
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
     )
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            safe_print(line.rstrip())
+        return_code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        raise
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, command)
 
 
 def install_packages(packages: list[str]) -> None:
@@ -117,6 +243,7 @@ def install_packages(packages: list[str]) -> None:
         return
 
     ensure_pip()
+    prune_vendor_distributions()
     python = installer_python()
     command = [
         python,
@@ -133,9 +260,10 @@ def install_packages(packages: list[str]) -> None:
         *packages,
     ]
     env = os.environ.copy()
+    env["PYTHONNOUSERSITE"] = "1"
     prepend_pythonpath(VENDOR_DIR)
     env["PYTHONPATH"] = os.environ.get("PYTHONPATH", "")
-    subprocess.run(command, check=True, env=env)
+    run_logged_subprocess(command, env=env)
     importlib.invalidate_caches()
     prepend_sys_path(VENDOR_DIR)
 

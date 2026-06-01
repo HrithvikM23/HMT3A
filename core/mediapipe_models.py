@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 DEFAULT_MEDIAPIPE_POSE_MODEL = "pose_landmark_full.tflite"
 
 MEDIAPIPE_POSE_MODEL_COMPLEXITIES = {

@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-
 PROFILE_FASTEST = "fastest"
 PROFILE_MID = "mid"
 PROFILE_QUALITY = "quality"
@@ -117,6 +116,14 @@ PROFILE_CONTROLLED_ARGS = frozenset(
     }
 )
 
+YOLO_FAST_PRESETS = {
+    "nano": ("yolo11n-pose.pt", 640),
+    "small": ("yolo11s-pose.pt", 640),
+    "medium": ("yolo11m-pose.pt", 768),
+    "large": ("yolo11l-pose.pt", 832),
+    "xlarge": ("yolo11x-pose.pt", 960),
+}
+
 
 def apply_runtime_profile(args: Any, explicit_dests: set[str]) -> None:
     profile_name = getattr(args, "profile", PROFILE_QUALITY)
@@ -124,3 +131,11 @@ def apply_runtime_profile(args: Any, explicit_dests: set[str]) -> None:
     for dest, value in profile.settings.items():
         if dest not in explicit_dests:
             setattr(args, dest, value)
+
+    preset_name = getattr(args, "yolo_fast_preset", None)
+    if preset_name:
+        model_name, input_size = YOLO_FAST_PRESETS[preset_name]
+        if "model" not in explicit_dests:
+            args.model = model_name
+        if "body_input_size" not in explicit_dests:
+            args.body_input_size = input_size

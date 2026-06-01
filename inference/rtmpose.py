@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-import cv2
 import math
-import numpy as np
 import shutil
 from pathlib import Path
 from typing import Any, TypedDict, cast
 
-from core.backend_selection import needs_mediapipe, needs_onnx_hand, needs_yolo_body
+import cv2
+import numpy as np
+
+from core.backend_selection import needs_mediapipe, needs_onnx_hand, needs_rtmpose_body, needs_yolo_body
 from core.mediapipe_models import (
     DEFAULT_MEDIAPIPE_POSE_MODEL,
     mediapipe_pose_model_complexity,
 )
+from utils.payloads import HandPayload
 from utils.skeleton import BODY_FOOT_NAME_TO_INDEX, BODY_NAME_TO_INDEX
 
 try:
@@ -23,6 +25,13 @@ try:
     from ultralytics import YOLO
 except ModuleNotFoundError:
     YOLO = None
+
+try:
+    from rtmlib import Body, PoseTracker, Wholebody
+except ModuleNotFoundError:
+    Body = None
+    PoseTracker = None
+    Wholebody = None
 
 
 def _cuda_available() -> bool:
@@ -92,10 +101,13 @@ class ONNXPoseHandRunner:
     def __init__(self, config):
         self.config = config
         self.body_model = None
+        self.rtmpose_model = None
+        self._wholebody_hands_by_body: dict[tuple[tuple[int, int, float], ...], dict[str, HandPayload]] = {}
         self.hand_session = None
         self.last_body_depths: dict[str, float] = {}
         self.last_hand_depths: list[float] | None = None
         self._uses_yolo_body = needs_yolo_body(config.body_backend, config.enable_backend_fallbacks)
+        self._uses_rtmpose_body = needs_rtmpose_body(config.body_backend)
         self._uses_onnx_hand = needs_onnx_hand(config.hand_backend, config.enable_backend_fallbacks)
         self._uses_mediapipe = needs_mediapipe(config.body_backend, config.hand_backend, config.enable_backend_fallbacks)
 
@@ -103,6 +115,21 @@ class ONNXPoseHandRunner:
             if YOLO is None:
                 raise ModuleNotFoundError("ultralytics is not installed. Install `ultralytics` or use --body-backend mediapipe.")
             self.body_model = YOLO(str(config.body_model_path))
+
+        if self._uses_rtmpose_body:
+            if Body is None or PoseTracker is None or Wholebody is None:
+                raise ModuleNotFoundError("rtmlib is not installed. Install `rtmlib` or use --body-backend yolo.")
+            solution = Wholebody if config.body_backend == "rtmpose-wholebody" else Body
+            self.rtmpose_model = PoseTracker(
+                solution,
+                det_frequency=config.rtmpose_det_frequency,
+                tracking=config.rtmpose_tracking,
+                tracking_thr=config.person_match_threshold,
+                mode=config.rtmpose_mode,
+                to_openpose=False,
+                backend=config.rtmpose_backend,
+                device=config.rtmpose_device,
+            )
 
         if self._uses_onnx_hand:
             if ort is None:
@@ -387,6 +414,9 @@ class ONNXPoseHandRunner:
         return np.asarray(tensor_like, dtype=dtype)
 
     def detect_bodies(self, frame_bgr, max_people: int, track: bool):
+        if self.config.body_backend in {"rtmpose", "rtmpose-wholebody"}:
+            return self._detect_bodies_rtmpose(frame_bgr, max_people)
+
         if self.config.body_backend == "mediapipe":
             body_points = self._detect_body_mediapipe(frame_bgr)
             if not body_points:
@@ -471,6 +501,92 @@ class ONNXPoseHandRunner:
             )
         detections.sort(key=lambda item: item["score"], reverse=True)
         return detections[:max_people]
+
+    def _detect_bodies_rtmpose(self, frame_bgr, max_people: int) -> list[BodyDetection]:
+        if self.rtmpose_model is None:
+            return []
+
+        self._wholebody_hands_by_body = {}
+        keypoints, scores = self.rtmpose_model(frame_bgr)
+        keypoints_array = np.asarray(keypoints, dtype=np.float32)
+        scores_array = np.asarray(scores, dtype=np.float32)
+        if keypoints_array.size == 0:
+            return []
+        if keypoints_array.ndim == 2:
+            keypoints_array = keypoints_array[None, ...]
+        if scores_array.ndim == 1:
+            scores_array = scores_array[None, ...]
+
+        detections: list[BodyDetection] = []
+        for person_index in range(min(len(keypoints_array), max_people)):
+            person_keypoints = keypoints_array[person_index]
+            person_scores = scores_array[person_index] if person_index < len(scores_array) else np.ones((len(person_keypoints),), dtype=np.float32)
+            point_count = min(17, len(person_keypoints), len(person_scores))
+            body_points: list[tuple[int, int, float]] = []
+            for point_index in range(point_count):
+                point = person_keypoints[point_index]
+                score = float(person_scores[point_index])
+                body_points.append((int(round(float(point[0]))), int(round(float(point[1]))), score))
+            while len(body_points) < 17:
+                body_points.append((0, 0, 0.0))
+            if self.config.body_backend == "rtmpose-wholebody":
+                hands_by_side = self._extract_wholebody_hands(person_keypoints, person_scores)
+                if hands_by_side:
+                    self._wholebody_hands_by_body[tuple(body_points)] = hands_by_side
+
+            confident_points = [
+                (x, y)
+                for x, y, confidence in body_points
+                if confidence > self.config.body_conf_threshold
+            ]
+            if confident_points:
+                x_values = [point[0] for point in confident_points]
+                y_values = [point[1] for point in confident_points]
+                box = (min(x_values), min(y_values), max(x_values), max(y_values))
+            else:
+                box = (0, 0, 0, 0)
+            detections.append(
+                {
+                    "id": None,
+                    "score": float(np.mean(person_scores[:point_count])) if point_count else 0.0,
+                    "box": box,
+                    "body_points": body_points,
+                }
+            )
+
+        detections.sort(key=lambda item: item["score"], reverse=True)
+        return detections
+
+    def _extract_wholebody_hands(self, keypoints: np.ndarray[Any, Any], scores: np.ndarray[Any, Any]) -> dict[str, HandPayload]:
+        hands_by_side: dict[str, HandPayload] = {}
+        for side, start_index in (
+            ("left", self.config.rtmpose_wholebody_left_hand_start),
+            ("right", self.config.rtmpose_wholebody_right_hand_start),
+        ):
+            end_index = start_index + 21
+            if len(keypoints) < end_index or len(scores) < end_index:
+                continue
+            points: list[tuple[int, int, float]] = []
+            for point, score in zip(keypoints[start_index:end_index], scores[start_index:end_index], strict=True):
+                points.append((int(round(float(point[0]))), int(round(float(point[1]))), float(score)))
+            visible_points = [(x, y) for x, y, confidence in points if confidence > self.config.hand_kp_threshold]
+            if visible_points:
+                xs = [point[0] for point in visible_points]
+                ys = [point[1] for point in visible_points]
+                box = (min(xs), min(ys), max(xs), max(ys))
+            else:
+                box = (0, 0, 0, 0)
+            hands_by_side[side] = {"box": box, "points": points}
+        return hands_by_side
+
+    def detect_wholebody_hand(self, side: str, body_points: list[tuple[int, int, float]]) -> HandPayload | None:
+        payload = self._wholebody_hands_by_body.get(tuple(body_points), {}).get(side)
+        if payload is None:
+            return None
+        return {
+            "box": tuple(payload["box"]),
+            "points": list(payload["points"]),
+        }
 
     def detect_hand(self, frame_bgr, box):
         self.last_hand_depths = None

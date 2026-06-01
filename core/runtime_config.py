@@ -12,6 +12,8 @@ from core.mediapipe_models import (
     mediapipe_pose_model_names,
     normalize_mediapipe_pose_model,
 )
+from core.runtime_report import build_runtime_report, runtime_report_lines
+from utils.logging import log_error, log_info
 from utils.model_assets import (
     DEFAULT_BODY_MODEL,
     HAND_MODEL_SPECS,
@@ -20,7 +22,6 @@ from utils.model_assets import (
     ensure_mediapipe_pose_model_file,
     ensure_model_file,
 )
-
 
 DEFAULT_PROVIDER_NAMES = ("CUDAExecutionProvider",)
 
@@ -60,7 +61,7 @@ def prepare_model_assets(config: PipelineConfig) -> None:
 
     hand_spec = HAND_MODEL_SPECS[config.hand_model_variant]
     if config.hand_model_path is None:
-        print(f"Preparing hand model preset '{config.hand_model_variant}'...")
+        log_info(f"Preparing hand model preset '{config.hand_model_variant}'")
         config.hand_model_path = ensure_model_file(config.project_root, hand_spec)
         config.hand_input_size = hand_spec.input_size
         config.hand_input_name = hand_spec.input_name
@@ -105,15 +106,24 @@ def resolve_fused_output_path(output_path: Path | None) -> Path | None:
 
 
 def validate_config(config: PipelineConfig) -> bool:
-    if config.body_backend not in {"yolo", "mediapipe"}:
+    if config.body_backend not in {"yolo", "mediapipe", "rtmpose", "rtmpose-wholebody"}:
         print(f"Error: invalid body backend: {config.body_backend}")
         return False
-    if config.hand_backend not in {"onnx", "mediapipe"}:
+    if config.hand_backend not in {"onnx", "mediapipe", "rtmpose-wholebody"}:
         print(f"Error: invalid hand backend: {config.hand_backend}")
+        return False
+    if (config.body_backend == "rtmpose-wholebody") != (config.hand_backend == "rtmpose-wholebody"):
+        print("Error: RTMPose WholeBody must own both body and hand backends.")
         return False
     if config.body_backend == "mediapipe" and config.mediapipe_pose_model not in mediapipe_pose_model_names():
         accepted = ", ".join(mediapipe_pose_model_names())
         print(f"Error: invalid MediaPipe pose model: {config.mediapipe_pose_model}. Accepted values: {accepted}")
+        return False
+    if config.rtmpose_mode not in {"lightweight", "balanced", "performance"}:
+        print(f"Error: invalid RTMPose mode: {config.rtmpose_mode}")
+        return False
+    if config.rtmpose_backend not in {"onnxruntime", "opencv"}:
+        print(f"Error: invalid RTMPose backend: {config.rtmpose_backend}")
         return False
     missing_paths = [
         path for path in (config.hand_model_path, config.mediapipe_pose_model_path)
@@ -171,6 +181,7 @@ def validate_config(config: PipelineConfig) -> bool:
         "person_track_hold_frames": config.person_track_hold_frames,
         "body_detect_interval": config.body_detect_interval,
         "hand_detect_interval": config.hand_detect_interval,
+        "rtmpose_det_frequency": config.rtmpose_det_frequency,
     }
     for field_name, value in positive_int_fields.items():
         if value <= 0:
@@ -218,6 +229,9 @@ def validate_config(config: PipelineConfig) -> bool:
     if config.fps_log_interval < 0:
         print(f"Error: fps_log_interval must be zero or greater: {config.fps_log_interval}")
         return False
+    if config.benchmark_frames < 0:
+        print(f"Error: benchmark_frames must be zero or greater: {config.benchmark_frames}")
+        return False
     if config.export_cleanup_max_velocity <= 0:
         print(f"Error: export_cleanup_max_velocity must be positive: {config.export_cleanup_max_velocity}")
         return False
@@ -230,14 +244,40 @@ def validate_config(config: PipelineConfig) -> bool:
     return True
 
 
-def prepare_runtime_config(config: PipelineConfig) -> bool:
-    apply_auto_performance(config)
-    try:
-        prepare_model_assets(config)
-    except Exception as exc:
-        print(f"Error: failed to prepare model assets: {exc}")
+def validate_dry_run_config(config: PipelineConfig) -> bool:
+    if not validate_config(config):
         return False
-    return validate_config(config)
+    assert config.output_directory is not None
+    if not config.output_directory.exists():
+        log_error(f"Output directory does not exist: {config.output_directory}")
+        return False
+    if not config.output_directory.is_dir():
+        log_error(f"Output path is not a directory: {config.output_directory}")
+        return False
+    probe_path = config.output_directory / ".kinara_write_test"
+    try:
+        probe_path.write_text("ok", encoding="utf-8")
+        probe_path.unlink()
+    except OSError as exc:
+        log_error(f"Output directory is not writable: {config.output_directory} ({exc})")
+        return False
+    return True
+
+
+def prepare_runtime_config(config: PipelineConfig, *, prepare_assets: bool = True) -> bool:
+    apply_auto_performance(config)
+    if prepare_assets:
+        try:
+            prepare_model_assets(config)
+        except Exception as exc:
+            log_error(f"Failed to prepare model assets: {exc}")
+            return False
+    if not validate_dry_run_config(config):
+        return False
+    report = build_runtime_report(config)
+    for line in runtime_report_lines(report):
+        log_info(line)
+    return True
 
 
 def apply_auto_performance(config: PipelineConfig) -> None:
@@ -268,6 +308,19 @@ def _build_pipeline_config(
     calibration_3d_path = args.calibration_3d
     body_backend, hand_backend, enable_backend_fallbacks = resolve_backend_selection(args)
     body_model_path, body_model_variant, mediapipe_pose_model = resolve_body_model_settings(args.model, body_backend)
+    sync_offsets = args.sync_offsets or []
+    if isinstance(sync_offsets, dict):
+        sync_offset_map = {str(label).upper(): int(offset) for label, offset in sync_offsets.items()}
+    else:
+        sync_offset_map = {label.upper(): offset for label, offset in sync_offsets}
+    identity_hints = args.identity_hints or []
+    if isinstance(identity_hints, dict):
+        identity_hint_map = {
+            str(label): tuple(colors if isinstance(colors, list | tuple) else [str(colors)])
+            for label, colors in identity_hints.items()
+        }
+    else:
+        identity_hint_map = dict(identity_hints)
     return PipelineConfig(
         video_path=video_path,
         output_path=output_path,
@@ -330,7 +383,7 @@ def _build_pipeline_config(
         triangulation_reprojection_error=args.triangulation_reprojection_error,
         triangulation_max_error=args.triangulation_max_error,
         triangulation_smoothing_alpha=args.triangulation_smoothing_alpha,
-        sync_offsets={label.upper(): offset for label, offset in (args.sync_offsets or [])},
+        sync_offsets=sync_offset_map,
         fused_depth_scale=args.fused_depth_scale,
         single_camera_depth_mode=args.single_camera_depth,
         auto_performance_enabled=not args.no_auto_performance,
@@ -340,6 +393,11 @@ def _build_pipeline_config(
         yolo_fuse=not args.no_yolo_fuse,
         yolo_warmup=not args.no_yolo_warmup,
         yolo_person_class_filter=not args.no_yolo_person_class_filter,
+        rtmpose_mode=args.rtmpose_mode,
+        rtmpose_backend=args.rtmpose_backend,
+        rtmpose_device=args.rtmpose_device,
+        rtmpose_det_frequency=args.rtmpose_det_frequency,
+        rtmpose_tracking=not args.no_rtmpose_tracking,
         body_detect_interval=args.body_detect_interval,
         hand_detect_interval=args.hand_detect_interval,
         hand_crop_retries=args.hand_crop_retries,
@@ -354,7 +412,8 @@ def _build_pipeline_config(
         export_foot_lock_max_lift=args.foot_lock_max_lift,
         fps_log_interval=args.fps_log_interval,
         fps_overlay_enabled=not args.no_fps_overlay,
-        identity_hints=dict(args.identity_hints or []),
+        benchmark_frames=args.benchmark_frames,
+        identity_hints=identity_hint_map,
     )
 
 

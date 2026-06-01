@@ -4,7 +4,6 @@ from typing import Any
 
 from utils.color_profile import color_profile_similarity
 
-
 PersonTrack = Any
 
 
@@ -103,7 +102,7 @@ def _assign_leftover_tracks(
     reference_keys: list[str],
 ) -> None:
     open_reference_keys = [key for key in reference_keys if camera_label not in grouped.get(key, {})]
-    for key, track in zip(open_reference_keys, tracks):
+    for key, track in zip(open_reference_keys, tracks, strict=False):
         grouped.setdefault(key, {})[camera_label] = track
 
     extra_index = 0

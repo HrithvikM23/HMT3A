@@ -7,7 +7,7 @@ import cv2
 
 from core.config import PipelineConfig
 from pipeline.pipeline import PoseHandPipeline
-from utils.exports import build_joint_map, export_motion_fbx, export_motion_json, _normalize_export_frames
+from utils.exports import _normalize_export_frames, build_joint_map, export_motion_fbx, export_motion_json
 from utils.fusion import fuse_hand_views
 from utils.motion_cleanup import cleanup_motion_frames
 from utils.payloads import HandPayload, PersonPayload

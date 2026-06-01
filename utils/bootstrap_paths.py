@@ -96,7 +96,7 @@ def register_windows_dll_directory(path: Path) -> bool:
             return False
 
     handle = os.add_dll_directory(str(path))
-    setattr(handle, "_kinara_path", str(path))
+    handle._kinara_path = str(path)
     WINDOWS_DLL_DIRECTORIES.append(handle)
     return True
 

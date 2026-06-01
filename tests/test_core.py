@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import io
+import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
-import json
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,24 +17,30 @@ import numpy as np
 
 from core.cli import InputAssignment, build_parser, explicit_option_dests, resolve_sources
 from core.config import PipelineConfig
-from inference.rtmpose import ONNXPoseHandRunner
-from runners.fused_alignment import align_people_across_cameras
-from core.runtime_config import build_config_for_assignment, prepare_model_assets, select_reference_assignment, validate_config
+from core.config_file import load_config_defaults
+from core.runtime_config import (
+    build_config_for_assignment,
+    prepare_model_assets,
+    select_reference_assignment,
+    validate_config,
+)
 from core.runtime_profiles import apply_runtime_profile
+from inference.rtmpose import ONNXPoseHandRunner
+from pipeline.pipeline import PoseHandPipeline
+from runners.fused_alignment import align_people_across_cameras
 from utils.body_geometry import derive_foot_points
-from utils.fusion import DEFAULT_CAMERA_CALIBRATION, fuse_body_views, load_camera_calibrations
-from utils.fps import FpsMeter, draw_fps_overlay
-from utils.normalize import build_hand_box
 from utils.color_profile import color_profile_similarity
 from utils.exports import build_joint_map, export_motion_json
+from utils.fps import FpsMeter, draw_fps_overlay
+from utils.fusion import DEFAULT_CAMERA_CALIBRATION, fuse_body_views, load_camera_calibrations
 from utils.hand_fallback import anchor_hand_to_wrist, has_usable_hand_detection, is_hand_detection_valid
 from utils.hand_tracking import hand_detection_score, predict_hand_payload
 from utils.motion_cleanup import cleanup_motion_frames
+from utils.normalize import build_hand_box
 from utils.prediction import predict_points, translate_points
 from utils.preview_stream import PreviewFrameSink
 from utils.skeleton import JointMap
 from utils.triangulation import apply_triangulated_overrides, triangulate_observation_frames
-from pipeline.pipeline import PoseHandPipeline
 
 
 def _body_points() -> list[tuple[int, int, float]]:
@@ -53,6 +61,174 @@ def _body_points() -> list[tuple[int, int, float]]:
 
 
 class CoreLogicTests(unittest.TestCase):
+    def test_module_help_smoke(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-m", "kinara", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--source", completed.stdout)
+        self.assertIn("--landmark-backend", completed.stdout)
+
+    def test_cli_entrypoint_dispatches_single_assignment(self) -> None:
+        from app import main as app_main
+
+        argv = ["kinara", "--source", "0", "--no-preview", "--output-basename", "smoke"]
+        with (
+            patch.object(sys, "argv", argv),
+            patch.object(app_main, "ensure_runtime_ready") as ensure_runtime_ready,
+            patch("runners.single.run_assignment") as run_assignment,
+        ):
+            app_main.main()
+
+        ensure_runtime_ready.assert_called_once()
+        run_assignment.assert_called_once()
+        config = run_assignment.call_args.args[0]
+        self.assertEqual(config.video_path, 0)
+        self.assertFalse(config.enable_preview)
+        self.assertEqual(config.output_basename, "smoke")
+
+    def test_config_file_defaults_can_be_overridden(self) -> None:
+        parser = build_parser()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "kinara.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "source": ["0"],
+                        "output_basename": "from_config",
+                        "benchmark_frames": 5,
+                        "no_preview": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config_dests = load_config_defaults(parser, config_path)
+            args = parser.parse_args(["--config", str(config_path), "--output-basename", "from_cli"])
+
+        self.assertIn("benchmark_frames", config_dests)
+        self.assertEqual(args.source, ["0"])
+        self.assertEqual(args.output_basename, "from_cli")
+        self.assertEqual(args.benchmark_frames, 5)
+        self.assertTrue(args.no_preview)
+
+    def test_dry_run_does_not_dispatch_runner(self) -> None:
+        from app import main as app_main
+
+        argv = ["kinara", "--source", "0", "--dry-run", "--no-preview", "--output-basename", "dry"]
+        with (
+            patch.object(sys, "argv", argv),
+            patch.object(app_main, "ensure_runtime_ready") as ensure_runtime_ready,
+            patch("runners.single.run_assignment") as run_assignment,
+        ):
+            app_main.main()
+
+        ensure_runtime_ready.assert_called_once()
+        self.assertTrue(ensure_runtime_ready.call_args.kwargs["check_only"])
+        run_assignment.assert_not_called()
+
+    def test_pipeline_config_allocates_metadata_path(self) -> None:
+        config = PipelineConfig(output_basename="metadata_test")
+
+        self.assertTrue(config.metadata_output_path.name.startswith("metadata_test metadata-"))
+        self.assertTrue(config.metadata_output_path.name.endswith(".json"))
+
+    def test_installer_python_does_not_default_to_blender_python(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+
+        with (
+            patch.dict(os.environ, {"KINARA_PYTHON": ""}, clear=False),
+            patch.object(bootstrap_packages.sys, "_base_executable", "", create=True),
+        ):
+            installer = bootstrap_packages.installer_python()
+
+        self.assertEqual(Path(installer).resolve(), Path(sys.executable).resolve())
+
+    def test_installer_python_accepts_python_directory(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+
+        python_dir = str(Path(sys.executable).parent)
+        with patch.dict(os.environ, {"KINARA_PYTHON": python_dir}, clear=False):
+            installer = bootstrap_packages.installer_python()
+
+        self.assertEqual(Path(installer).resolve(), Path(sys.executable).resolve())
+
+    def test_calibration_mode_requests_calibration_runtime_modules(self) -> None:
+        from utils.bootstrap_dependencies import _selected_runtime_modules
+
+        modules = _selected_runtime_modules(["--calibrate-cameras", "--source", "CAM_0=a.mp4", "--source", "CAM_1=b.mp4"])
+
+        self.assertIn("aniposelib", modules)
+        self.assertIn("cv2", modules)
+
+    def test_calibration_install_plan_uses_contrib_opencv_and_numpy_pin(self) -> None:
+        from utils.bootstrap_packages import resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        plan = resolve_install_plan(
+            [
+                ModuleStatus("aniposelib", False),
+                ModuleStatus("cv2", False),
+                ModuleStatus("numpy", False),
+            ],
+            RuntimeReport(),
+        )
+
+        self.assertIn("aniposelib>=0.7,<0.8", plan)
+        self.assertIn("numpy>=1.26,<2.0", plan)
+        self.assertIn("opencv-contrib-python>=4.9,<4.12", plan)
+        self.assertIn("protobuf>=4.25.3,<5", plan)
+
+    def test_calibration_empty_detections_raise_actionable_error(self) -> None:
+        from utils.calibration import _validate_detected_rows
+
+        with self.assertRaisesRegex(ValueError, "no Charuco boards were detected"):
+            _validate_detected_rows([[], []], ["CAM_0", "CAM_1"], marker_bits=4, dict_size=250)
+
+    def test_mediapipe_install_plan_pins_protobuf(self) -> None:
+        from utils.bootstrap_packages import resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        plan = resolve_install_plan([ModuleStatus("mediapipe", False)], RuntimeReport())
+
+        self.assertIn("mediapipe==0.10.21", plan)
+        self.assertIn("protobuf>=4.25.3,<5", plan)
+
+    def test_installed_mediapipe_repair_plan_pins_new_protobuf(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+        from utils.bootstrap_packages import resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        with patch.object(bootstrap_packages, "distribution_version", return_value="7.35.0"):
+            plan = resolve_install_plan([ModuleStatus("mediapipe", True)], RuntimeReport())
+
+        self.assertIn("protobuf>=4.25.3,<5", plan)
+
+    def test_install_packages_hides_user_site_packages_from_pip(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+
+        captured_envs = []
+
+        def fake_run(*_args, **kwargs):
+            captured_envs.append(kwargs.get("env", {}))
+            return subprocess.CompletedProcess(_args, 0)
+
+        with (
+            patch.object(bootstrap_packages, "installer_python", return_value=sys.executable),
+            patch.object(bootstrap_packages.subprocess, "run", side_effect=fake_run),
+            patch.object(bootstrap_packages, "prune_vendor_distributions"),
+            patch.object(bootstrap_packages, "prepend_pythonpath"),
+            patch.object(bootstrap_packages, "prepend_sys_path"),
+        ):
+            bootstrap_packages.install_packages(["example-package"])
+
+        self.assertTrue(captured_envs)
+        self.assertTrue(all(env.get("PYTHONNOUSERSITE") == "1" for env in captured_envs))
+
     def test_cli_defaults_build_config(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["--source", "0", "--no-preview"])
@@ -65,6 +241,44 @@ class CoreLogicTests(unittest.TestCase):
         self.assertFalse(config.enable_preview)
         self.assertEqual(config.max_people, 1)
         self.assertEqual(config.body_detect_interval, 1)
+
+    def test_cli_rtmpose_backend_build_config(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "--source",
+            "0",
+            "--landmark-backend",
+            "rtmpose",
+            "--rtmpose-mode",
+            "lightweight",
+            "--rtmpose-device",
+            "cuda",
+            "--no-preview",
+        ])
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
+
+        self.assertEqual(config.body_backend, "rtmpose")
+        self.assertEqual(config.hand_backend, "onnx")
+        self.assertEqual(config.rtmpose_mode, "lightweight")
+        self.assertEqual(config.rtmpose_device, "cuda")
+
+    def test_cli_rtmpose_wholebody_locks_body_and_hand_backends(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "--source",
+            "0",
+            "--landmark-backend",
+            "rtmpose-wholebody",
+            "--body-backend",
+            "yolo",
+            "--hand-backend",
+            "onnx",
+            "--no-preview",
+        ])
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
+
+        self.assertEqual(config.body_backend, "rtmpose-wholebody")
+        self.assertEqual(config.hand_backend, "rtmpose-wholebody")
 
     def test_cli_speed_knobs_build_config(self) -> None:
         parser = build_parser()
@@ -675,6 +889,36 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(left_shoulder["x"], 105.0)
         self.assertEqual(left_shoulder["z"], 42.0)
         self.assertGreater(result.triangulated_point_count, 0)
+
+    def test_freemocap_style_output_writes_calibrated_arrays(self) -> None:
+        from utils.triangulation import TriangulationResult, export_freemocap_style_output
+
+        points_3d = np.array([[[1.0, 2.0, 3.0], [4.0, np.nan, 6.0]]], dtype=np.float64)
+        confidences = np.array([[0.9, 0.0]], dtype=np.float64)
+        result = TriangulationResult(
+            joint_overrides_by_frame=[],
+            camera_labels=["CAM_0", "CAM_1"],
+            joint_names=["A", "B"],
+            points_2d_xy=np.zeros((2, 1, 2, 2), dtype=np.float64),
+            points_3d_xyz=points_3d,
+            confidences=confidences,
+            reprojection_error=np.array([[0.1, np.nan]], dtype=np.float64),
+            full_reprojection_error=np.zeros((2, 1, 2), dtype=np.float64),
+            mean_reprojection_error=0.5,
+            triangulated_point_count=1,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = export_freemocap_style_output(Path(tmp_dir), result)
+            saved = np.load(paths["skeleton_3d_npy"])
+            csv_text = Path(paths["skeleton_3d_csv"]).read_text(encoding="utf-8")
+            self.assertTrue(Path(paths["raw_2d_npy"]).exists())
+            self.assertTrue(Path(paths["reprojection_error_npy"]).exists())
+            self.assertTrue(Path(paths["full_reprojection_error_npy"]).exists())
+
+        self.assertEqual(saved.shape, (1, 2, 3))
+        self.assertIn("frame,tracked_point,x,y,z,confidence", csv_text)
+        self.assertIn("0,A,1.00000000,2.00000000,3.00000000,0.90000000", csv_text)
 
     def test_export_motion_json_writes_metadata_and_frames(self) -> None:
         frame = {"frame_index": 0, "joints": build_joint_map(_body_points(), {})}
