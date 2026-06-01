@@ -484,7 +484,7 @@ For each camera:
 
 ### Calibration role
 
-`utils.fusion.load_camera_calibrations()` accepts lightweight calibration JSON keyed by source labels such as `CAM_0` and `CAM_1`. That path is a practical pseudo-depth system that uses configured camera orientation and relative lateral displacement to estimate depth-like values good enough for export and retarget experimentation. Cameras without calibration data use neutral depth settings.
+`utils.fusion.load_camera_calibrations()` accepts lightweight calibration JSON keyed by source labels such as `CAM_0` and `CAM_1`. That path is a practical pseudo-depth system that uses configured camera orientation and relative lateral displacement to estimate depth-like values good enough for export and retarget experimentation. Cameras without calibration data use neutral depth settings; measured calibration is required for real-world depth.
 
 For fused runs, Kinara can also load a calibrated camera TOML with `--triangulate-3d --calibration-3d`. In that mode, Kinara keeps its YOLO body and ONNX hand detections, stores matched per-camera 2D landmarks for the run, triangulates them after the frame loop, and replaces heuristic fused joint coordinates with calibrated 3D coordinates where reconstruction succeeds.
 
@@ -685,3 +685,4 @@ The result is easier to debug than a deeply abstracted system because each stage
 14. `utils/skeleton.py`
 15. `blender_kinematics/kinara_motion.py`
 16. `blender_kinematics/import_kinara_motion.py`
+

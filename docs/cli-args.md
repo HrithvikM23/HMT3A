@@ -55,7 +55,29 @@ Function: Sets marker length as a fraction of square size.
 Accepted range: float `> 0`.  
 Default: `0.8`
 
-Recommended board: 7 x 5 Charuco squares, 35 mm square size, 28 mm marker size. If your printed square edge measures differently, use the measured value for `--charuco-square-size`.
+`--charuco-marker-bits`  
+Function: Sets the ArUco marker bit width used by the ChArUco board.  
+Accepted values: `4`, `5`, `6`, `7`.  
+Default: `4`
+
+`--charuco-dict-size`  
+Function: Sets the ArUco dictionary size used by the ChArUco board.  
+Accepted values: `50`, `100`, `250`, `1000`.  
+Default: `50`
+
+`--charuco-legacy-pattern`  
+Function: Enables OpenCV's legacy ChArUco marker layout.  
+Accepted values: flag only.  
+Default: disabled  
+Notes: Enable this for older/online-generated boards when ArUco markers are detected but ChArUco corners remain zero.
+
+`--charuco-detection-strictness`  
+Function: Controls how aggressively calibration retries weak board detections.  
+Accepted values: `strict`, `balanced`, `lenient`.  
+Default: `balanced`  
+Notes: `strict` uses normal OpenCV detection. `balanced` retries low-resolution frames at 2x. `lenient` uses a stronger 3x retry for compressed, distant, or low-resolution board videos.
+
+Recommended A3 landscape board: 11 x 8 ChArUco squares, 36 mm square size, 24 mm marker size, marker scale `0.6667`, dictionary `DICT_4X4_50`, latest OpenCV pattern. If your printed square edge measures differently, use the measured value for `--charuco-square-size`. If the board was generated with a legacy online generator, add `--charuco-legacy-pattern`.
 
 ## Model Selection
 
@@ -67,20 +89,20 @@ Notes: Known YOLO models are stored in `models/body/`. MediaPipe pose TFLite ass
 
 `--landmark-backend`  
 Function: Selects the high-level landmark backend family.  
-Accepted values: `yolo`, `mediapipe`, `hybrid`.  
+Accepted values: `rtmpose`, `rtmpose-wholebody`, `yolo`, `mediapipe`, `hybrid`.  
 Default: `mediapipe`  
-Notes: `yolo` maps to `--body-backend yolo --hand-backend onnx`. `mediapipe` maps to `--body-backend mediapipe --hand-backend mediapipe`. `hybrid` maps to MediaPipe body/hands with backend fallbacks enabled. Use `--model` to pick `pose_landmark_lite.tflite`, `pose_landmark_full.tflite`, or `pose_landmark_heavy.tflite` when MediaPipe body landmarks are active.
+Notes: `rtmpose` maps to `--body-backend rtmpose --hand-backend onnx` and is the preferred RTX/CUDA body path. `rtmpose-wholebody` maps to paired body+hand WholeBody inference and disables separate body/hand selection in the launcher. `yolo` maps to the legacy `--body-backend yolo --hand-backend onnx`. `mediapipe` maps to `--body-backend mediapipe --hand-backend mediapipe`. `hybrid` maps to MediaPipe body/hands with backend fallbacks enabled.
 
 `--body-backend`  
 Function: Selects the body landmark backend.  
-Accepted values: `yolo`, `mediapipe`.  
+Accepted values: `rtmpose`, `rtmpose-wholebody`, `yolo`, `mediapipe`.  
 Default: resolved from `--landmark-backend`; `mediapipe` unless you select `--landmark-backend yolo`.  
-Notes: `yolo` supports multi-person tracking. `mediapipe` can provide richer single-person foot landmarks.
-MediaPipe can run through the multi-person runner/export path, but MediaPipe Pose only returns one body per frame; choose YOLO for true multi-person detection.
+Notes: `rtmpose` is the preferred CUDA body backend. `rtmpose-wholebody` owns both body and hands. `yolo` is retained as a legacy multi-person backend. `mediapipe` can provide richer single-person foot landmarks.
+MediaPipe can run through the multi-person runner/export path, but MediaPipe Pose only returns one body per frame; choose RTMPose or legacy YOLO for true multi-person detection.
 
 `--hand-backend`  
 Function: Selects the hand landmark backend.  
-Accepted values: `onnx`, `mediapipe`.  
+Accepted values: `onnx`, `rtmpose-wholebody`, `mediapipe`.  
 Default: resolved from `--landmark-backend`; `mediapipe` unless you select `--landmark-backend yolo`.
 
 `--backend-fallbacks`  
@@ -221,7 +243,7 @@ Default: `0.90`
 `--camera-calibration`  
 Function: Loads an optional JSON file with per-camera fusion calibration overrides.  
 Accepted values: path to a JSON object keyed by source label such as `CAM_0`, `CAM_1`, or another explicit label used in `--source`.  
-Notes: Supported numeric fields are currently `depth_sign` and `depth_scale`. Cameras without JSON entries use neutral depth settings.
+Notes: Supported numeric fields are currently `depth_sign` and `depth_scale`. Cameras without JSON entries use neutral depth settings; use a JSON override or calibrated 3D TOML for measured depth.
 
 `--calibration-3d`  
 Function: Loads a calibrated camera TOML for real multi-view 3D triangulation.  
@@ -495,3 +517,4 @@ Default: `16.0`
 Function: Disables the live OpenCV preview window.  
 Accepted values: flag only.  
 Default: preview enabled
+
