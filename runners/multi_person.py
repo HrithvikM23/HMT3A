@@ -20,9 +20,9 @@ from utils.preview_stream import PreviewFrameSink
 from utils.run_metadata import build_run_metadata, write_run_metadata
 
 
-def run_multi_person_assignment(config: PipelineConfig) -> None:
+def run_multi_person_assignment(config: PipelineConfig) -> bool:
     if not prepare_runtime_config(config):
-        return
+        return False
 
     assert config.output_path is not None
     session = VideoCaptureSession(
@@ -126,3 +126,4 @@ def run_multi_person_assignment(config: PipelineConfig) -> None:
     elapsed = max(time.perf_counter() - started_at, 1e-9)
     log_info(f"Processed {len(cleaned_motion_frames)} frames in {elapsed:.2f}s ({len(cleaned_motion_frames) / elapsed:.2f} FPS)")
     print_saved_paths(config.output_path, config.json_output_path, *exported_fbx_paths, config.metadata_output_path)
+    return True

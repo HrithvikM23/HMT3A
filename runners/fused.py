@@ -66,16 +66,23 @@ def _build_fused_metadata(
 def run_fused_assignments(
     assignments: list[InputAssignment],
     args: argparse.Namespace,
-) -> None:
-    config = build_fused_config(args, assignments)
+) -> bool:
+    try:
+        config = build_fused_config(args, assignments)
+    except OSError as exc:
+        print(f"Error: could not prepare output paths: {exc}")
+        return False
+    except RuntimeError as exc:
+        print(f"Error: {exc}")
+        return False
     if not prepare_runtime_config(config):
-        return
+        return False
 
     try:
         calibrations = load_camera_calibrations(config.camera_calibration_path)
     except Exception as exc:
         print(f"Error: failed to load camera calibration: {exc}")
-        return
+        return False
 
     sources: dict[str, VideoInputSource] = {}
     osc_sender = OSCSender(config.osc_host, config.osc_port, config.osc_enabled)
@@ -213,7 +220,7 @@ def run_fused_assignments(
             f"({len(cleaned_motion_frames) / elapsed:.2f} FPS)"
         )
         print_saved_paths(config.output_path, config.json_output_path, *exported_fbx_paths, config.metadata_output_path)
-        return
+        return True
 
     metadata = _build_fused_metadata("fused", assignments, config)
     if config.enable_3d_triangulation:
@@ -221,7 +228,7 @@ def run_fused_assignments(
             motion_frames, metadata = _apply_calibrated_triangulation(config, motion_frames, triangulation_frames, metadata)
         except RuntimeError as exc:
             print(f"Error: calibrated 3D export failed: {exc}")
-            return
+            return False
 
     export_motion_bundle(
         config,
@@ -242,6 +249,7 @@ def run_fused_assignments(
     elapsed = max(time.perf_counter() - started_at, 1e-9)
     log_info(f"Processed {len(motion_frames)} fused frames in {elapsed:.2f}s ({len(motion_frames) / elapsed:.2f} FPS)")
     print_saved_paths(config.output_path, config.json_output_path, config.fbx_output_path, config.metadata_output_path)
+    return True
 
 
 def _apply_calibrated_triangulation(

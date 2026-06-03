@@ -20,12 +20,11 @@ from utils.run_metadata import build_run_metadata, write_run_metadata
 from utils.smoothing import LandmarkSmoother
 
 
-def run_assignment(config: PipelineConfig) -> None:
+def run_assignment(config: PipelineConfig) -> bool:
     if config.max_people > 1:
-        run_multi_person_assignment(config)
-        return
+        return run_multi_person_assignment(config)
     if not prepare_runtime_config(config):
-        return
+        return False
 
     assert config.output_path is not None
     session = VideoCaptureSession(
@@ -115,3 +114,4 @@ def run_assignment(config: PipelineConfig) -> None:
     elapsed = max(time.perf_counter() - started_at, 1e-9)
     log_info(f"Processed {len(motion_frames)} frames in {elapsed:.2f}s ({len(motion_frames) / elapsed:.2f} FPS)")
     print_saved_paths(config.output_path, config.json_output_path, config.fbx_output_path, config.metadata_output_path)
+    return True

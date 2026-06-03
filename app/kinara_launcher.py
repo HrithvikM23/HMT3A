@@ -806,7 +806,7 @@ class KinaraLauncher(QMainWindow):
     def _selected_python_runtime(self) -> str:
         if self.python_path is None:
             return installer_python_path()
-        value = self.python_path.text().strip()
+        value = self.python_path.text().strip().strip('"').strip("'")
         if not value:
             return ""
         path = Path(value)

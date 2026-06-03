@@ -197,6 +197,25 @@ class CoreLogicTests(unittest.TestCase):
 
         self.assertIn("mediapipe==0.10.21", plan)
         self.assertIn("protobuf>=4.25.3,<5", plan)
+        self.assertIn("jax==0.7.1", plan)
+        self.assertIn("jaxlib==0.7.1", plan)
+
+    def test_mediapipe_install_plan_uses_single_opencv_flavor(self) -> None:
+        from utils.bootstrap_packages import resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        plan = resolve_install_plan(
+            [
+                ModuleStatus("cv2", False),
+                ModuleStatus("mediapipe", False),
+            ],
+            RuntimeReport(),
+        )
+
+        self.assertIn("opencv-contrib-python>=4.9,<4.12", plan)
+        self.assertNotIn("opencv-python", plan)
+        self.assertIn("mediapipe==0.10.21", plan)
+        self.assertEqual(plan.count("opencv-contrib-python>=4.9,<4.12"), 1)
 
     def test_installed_mediapipe_repair_plan_pins_new_protobuf(self) -> None:
         import utils.bootstrap_packages as bootstrap_packages

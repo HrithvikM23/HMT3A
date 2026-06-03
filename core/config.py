@@ -134,7 +134,10 @@ class PipelineConfig:
             output_directory = self.project_root / "outputs"
         else:
             output_directory = Path(self.output_directory)
-        output_directory.mkdir(parents=True, exist_ok=True)
+        try:
+            output_directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(f"output directory could not be created: {output_directory} ({exc})") from exc
         self.output_directory = output_directory
         resolved_output_directory = self.output_directory
 
@@ -149,7 +152,10 @@ class PipelineConfig:
         if self.output_path is not None:
             requested_output_path = Path(self.output_path)
             self.output_directory = requested_output_path.parent
-            self.output_directory.mkdir(parents=True, exist_ok=True)
+            try:
+                self.output_directory.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise RuntimeError(f"output directory could not be created: {self.output_directory} ({exc})") from exc
             resolved_output_directory = self.output_directory
             base_name = requested_output_path.stem
             self.video_extension = requested_output_path.suffix or ".mp4"

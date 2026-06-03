@@ -17,12 +17,23 @@ from utils.bootstrap_state import MODULE_TO_PACKAGE, VENDOR_DIR, ModuleStatus, R
 from utils.logging import safe_print
 
 PRUNED_VENDOR_DISTRIBUTIONS = ("openxlab",)
+WINDOWS_CONTROL_C_EXIT = 0xC000013A
+
+
+def _returncode_text(return_code: int) -> str:
+    if return_code == WINDOWS_CONTROL_C_EXIT or return_code == -1073741510:
+        return (
+            "The dependency installer was interrupted by Windows or cancelled before it finished. "
+            "Do not close Kinara or press Stop/Kill while the first run is installing packages. "
+            "If antivirus is scanning the app folder, wait and run Check Runtime again."
+        )
+    return f"Process exited with code {return_code}."
 
 
 def _valid_python_executable(candidate: str) -> str | None:
     if not candidate:
         return None
-    path = Path(candidate)
+    path = Path(candidate.strip().strip('"').strip("'"))
     if path.is_dir():
         path = path / "python.exe"
     if path.exists() and path.name.lower() == "python.exe":
@@ -106,6 +117,16 @@ def prune_vendor_distributions(distribution_names: tuple[str, ...] = PRUNED_VEND
                 pass
 
 
+def prune_opencv_distributions_for_contrib() -> None:
+    prune_vendor_distributions((
+        "cv2",
+        "opencv-contrib-python",
+        "opencv-python",
+        "opencv-python-headless",
+        "opencv-contrib-python-headless",
+    ))
+
+
 def module_status(module_name: str) -> ModuleStatus:
     try:
         importlib.invalidate_caches()
@@ -145,6 +166,7 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
     missing_modules = {status.module_name for status in module_statuses if not status.ok}
     packages_to_install: list[str] = []
     gpu_runtime_detected = report.nvidia_driver_detected and report.cuda_bin_dirs and report.cudnn_bin_dirs
+    mediapipe_requested = "mediapipe" in missing_modules
 
     if {"ultralytics", "torch", "torchvision"} & missing_modules:
         packages_to_install.append("ultralytics")
@@ -153,7 +175,10 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
     calibration_requested = "aniposelib" in missing_modules
 
     if "cv2" in missing_modules:
-        packages_to_install.append("opencv-contrib-python>=4.9,<4.12" if calibration_requested else "opencv-python")
+        if calibration_requested or mediapipe_requested:
+            packages_to_install.append("opencv-contrib-python>=4.9,<4.12")
+        else:
+            packages_to_install.append("opencv-python")
         missing_modules.discard("cv2")
         missing_modules.discard("numpy")
 
@@ -170,6 +195,10 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
     if "mediapipe" in missing_modules:
         packages_to_install.extend([
             MODULE_TO_PACKAGE["mediapipe"],
+            "numpy>=1.26,<2.0",
+            "opencv-contrib-python>=4.9,<4.12",
+            "jax==0.7.1",
+            "jaxlib==0.7.1",
             "protobuf>=4.25.3,<5",
         ])
         missing_modules.discard("mediapipe")
@@ -194,7 +223,7 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
         missing_modules.discard("cv2")
         missing_modules.discard("numpy")
 
-    return packages_to_install
+    return list(dict.fromkeys(packages_to_install))
 
 
 def ensure_pip() -> None:
@@ -235,6 +264,7 @@ def run_logged_subprocess(command: list[str], *, env: dict[str, str], timeout: i
         process.wait()
         raise
     if return_code != 0:
+        safe_print(_returncode_text(return_code))
         raise subprocess.CalledProcessError(return_code, command)
 
 
@@ -244,17 +274,25 @@ def install_packages(packages: list[str]) -> None:
 
     ensure_pip()
     prune_vendor_distributions()
+    if any(package.startswith(("opencv-contrib-python", "mediapipe")) for package in packages):
+        prune_opencv_distributions_for_contrib()
     python = installer_python()
     command = [
         python,
         "-m",
         "pip",
         "install",
+        "--no-input",
+        "--ignore-installed",
         "--disable-pip-version-check",
         "--upgrade",
         "--prefer-binary",
         "--progress-bar",
-        "on",
+        "off",
+        "--retries",
+        "3",
+        "--timeout",
+        "60",
         "--target",
         str(VENDOR_DIR),
         *packages,

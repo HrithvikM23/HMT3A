@@ -16,6 +16,7 @@ from core.backend_selection import (
 )
 from utils.bootstrap_cuda import inspect_runtime, repair_runtime_paths
 from utils.bootstrap_packages import (
+    WINDOWS_CONTROL_C_EXIT,
     dedupe_warning_messages,
     install_packages,
     probe_runtime,
@@ -24,6 +25,19 @@ from utils.bootstrap_packages import (
 from utils.bootstrap_paths import ensure_local_environment, find_missing_project_files
 from utils.bootstrap_state import MODULE_TO_PACKAGE, VENDOR_DIR, TerminalProgress
 from utils.logging import safe_print
+
+
+def _is_interrupted_install(exc: subprocess.CalledProcessError) -> bool:
+    return exc.returncode in (WINDOWS_CONTROL_C_EXIT, -1073741510)
+
+
+def _format_failed_statuses(statuses) -> str:
+    lines = []
+    for status in statuses:
+        package_name = MODULE_TO_PACKAGE.get(status.module_name, status.module_name)
+        detail = status.error or "Unknown import failure"
+        lines.append(f"- {status.module_name} ({package_name}): {detail}")
+    return "\n".join(lines)
 
 
 def _option_value(argv: list[str], option: str) -> str | None:
@@ -100,7 +114,15 @@ def ensure_runtime_ready(*, persist_cudnn_path: bool = True, check_only: bool = 
         progress.break_line()
         safe_print(f"Preparing runtime dependencies in {VENDOR_DIR}...")
         safe_print(f"Installing only missing packages: {', '.join(packages_to_install)}")
-        install_packages(packages_to_install)
+        try:
+            install_packages(packages_to_install)
+        except subprocess.CalledProcessError as exc:
+            if not _is_interrupted_install(exc):
+                raise
+            safe_print(
+                "Dependency installer was interrupted. Kinara will check whether enough packages finished "
+                "installing before failing."
+            )
     elif packages_to_install and check_only:
         progress.break_line()
         safe_print(f"Missing packages (--check-only): {', '.join(packages_to_install)}")
@@ -114,12 +136,7 @@ def ensure_runtime_ready(*, persist_cudnn_path: bool = True, check_only: bool = 
     failed_statuses = [status for status in statuses if not status.ok]
     if failed_statuses:
         progress.break_line()
-        lines = []
-        for status in failed_statuses:
-            package_name = MODULE_TO_PACKAGE.get(status.module_name, status.module_name)
-            detail = status.error or "Unknown import failure"
-            lines.append(f"- {status.module_name} ({package_name}): {detail}")
-        raise RuntimeError("Runtime bootstrap could not satisfy required dependencies:\n" + "\n".join(lines))
+        raise RuntimeError("Runtime bootstrap could not satisfy required dependencies:\n" + _format_failed_statuses(failed_statuses))
 
     progress.finish("Kinara runtime ready")
 

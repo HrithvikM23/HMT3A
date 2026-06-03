@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -18,6 +19,17 @@ from utils.logging import configure_run_log, install_safe_stdio, log_error, log_
 install_safe_stdio()
 
 
+def _checked_config(builder, *args, **kwargs):
+    try:
+        return builder(*args, **kwargs)
+    except OSError as exc:
+        log_error(f"Could not prepare output paths: {exc}")
+        raise SystemExit(1) from exc
+    except RuntimeError as exc:
+        log_error(str(exc))
+        raise SystemExit(1) from exc
+
+
 def main() -> None:
     log_path = configure_run_log(os.environ.get("KINARA_LOG_FILE"), prefix="kinara_runner")
     safe_print(f"Log file: {log_path}")
@@ -29,7 +41,7 @@ def main() -> None:
             config_dests = load_config_defaults(parser, pre_args.config)
         except ValueError as exc:
             log_error(str(exc))
-            return
+            raise SystemExit(1) from exc
 
     explicit_dests = config_dests | explicit_option_dests(parser, sys.argv[1:])
     args = parser.parse_args()
@@ -37,9 +49,12 @@ def main() -> None:
 
     try:
         ensure_runtime_ready(check_only=bool(args.dry_run or args.runtime_check))
+    except subprocess.CalledProcessError as exc:
+        log_error(f"Runtime dependency installation failed with exit code {exc.returncode}. See the run log above.")
+        raise SystemExit(1) from exc
     except Exception as exc:
         log_error(f"Runtime check failed: {exc}")
-        return
+        raise SystemExit(1) from exc
 
     from runners.fused import run_fused_assignments
     from runners.single import run_assignment
@@ -47,31 +62,33 @@ def main() -> None:
 
     if args.runtime_check:
         dry_assignment = type("Assignment", (), {"source": 0, "label": "CAM_0"})()
-        config = build_config_for_assignment(args, dry_assignment, False)
-        prepare_runtime_config(config, prepare_assets=False)
+        config = _checked_config(build_config_for_assignment, args, dry_assignment, False)
+        if not prepare_runtime_config(config, prepare_assets=False):
+            raise SystemExit(1)
         return
 
     assignments = resolve_sources(args)
     if not assignments:
-        return
+        raise SystemExit(1)
 
     if args.dry_run:
         if len(assignments) > 1:
-            config = build_fused_config(args, assignments)
+            config = _checked_config(build_fused_config, args, assignments)
         else:
-            config = build_config_for_assignment(args, assignments[0], False)
+            config = _checked_config(build_config_for_assignment, args, assignments[0], False)
         if prepare_runtime_config(config, prepare_assets=False):
             log_info("Dry run passed. No video was opened and no models were run.")
-        return
+            return
+        raise SystemExit(1)
 
     if args.calibrate_cameras:
         if not calibration_available():
             safe_print("Error: calibrated camera support is not installed in this runtime.")
-            return
+            raise SystemExit(1)
         output_path = args.calibration_output or (args.output_dir or assignments[0].source.parent if not isinstance(assignments[0].source, int) else None)
         if output_path is None:
             safe_print("Error: --calibration-output is required when calibrating from live camera indices.")
-            return
+            raise SystemExit(1)
         output_path = output_path if output_path.suffix else output_path / "camera_calibration.toml"
         try:
             saved_path = calibrate_cameras(
@@ -88,7 +105,7 @@ def main() -> None:
             )
         except Exception as exc:
             safe_print(f"Error: camera calibration failed: {exc}")
-            return
+            raise SystemExit(1) from exc
         safe_print(f"Saved: {saved_path}")
         report_path = saved_path.with_suffix(".quality.json")
         if report_path.exists():
@@ -97,13 +114,15 @@ def main() -> None:
 
     if len(assignments) > 1:
         safe_print("Running synchronized multi-camera fusion...")
-        run_fused_assignments(assignments, args)
+        if not run_fused_assignments(assignments, args):
+            raise SystemExit(1)
         return
 
     for assignment in assignments:
         safe_print(f"Running pipeline for {assignment.label}...")
-        config = build_config_for_assignment(args, assignment, False)
-        run_assignment(config)
+        config = _checked_config(build_config_for_assignment, args, assignment, False)
+        if not run_assignment(config):
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
