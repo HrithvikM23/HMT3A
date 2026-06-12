@@ -190,6 +190,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check Kinara runtime dependencies and print a backend report without requiring an input source.",
     )
     parser.add_argument(
+        "--skip-runtime-check",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--benchmark-frames",
         type=int,
         default=0,
@@ -251,6 +256,21 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("strict", "balanced", "lenient"),
         default="balanced",
         help="Charuco detection strictness. Strict uses normal OpenCV detection; balanced retries low-resolution frames at 2x; lenient uses stronger 3x retry for compressed or distant boards.",
+    )
+    parser.add_argument(
+        "--charuco-retry-scale",
+        type=float,
+        help="Override the ChArUco low-resolution retry scale. Use 1.5-4.0 for distant/compressed boards.",
+    )
+    parser.add_argument(
+        "--charuco-min-markers",
+        type=int,
+        help="Override the marker count required before skipping the enlarged ChArUco retry.",
+    )
+    parser.add_argument(
+        "--charuco-retry-sharpen",
+        action="store_true",
+        help="Sharpen the enlarged ChArUco retry frame before marker and corner interpolation.",
     )
     parser.add_argument(
         "--model",

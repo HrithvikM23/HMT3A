@@ -29,6 +29,9 @@ def calibrate_cameras(
     dict_size: int = 50,
     legacy_pattern: bool = False,
     detection_strictness: str = "balanced",
+    retry_scale: float | None = None,
+    minimum_markers: int | None = None,
+    retry_sharpen: bool = False,
 ) -> Path:
     if len(assignments) < 2:
         raise ValueError("Camera calibration needs at least two video sources.")
@@ -47,7 +50,13 @@ def calibrate_cameras(
         dict_size=dict_size,
     )
     _configure_charuco_legacy_pattern(board, legacy_pattern)
-    _enable_low_resolution_charuco_detection(board, detection_strictness=detection_strictness)
+    detector_settings = _enable_low_resolution_charuco_detection(
+        board,
+        detection_strictness=detection_strictness,
+        retry_scale=retry_scale,
+        minimum_markers=minimum_markers,
+        retry_sharpen=retry_sharpen,
+    )
     camera_group = camera_group_class.from_names(labels)
     all_rows = camera_group.get_rows_videos(videos, board, verbose=True)
     _validate_detected_rows(all_rows, labels, marker_bits=marker_bits, dict_size=dict_size)
@@ -66,6 +75,7 @@ def calibrate_cameras(
         dict_size=dict_size,
         legacy_pattern=legacy_pattern,
         detection_strictness=detection_strictness,
+        detector_settings=detector_settings,
         error=error,
         all_rows=all_rows,
     )
@@ -84,6 +94,7 @@ def _write_calibration_report(
     dict_size: int,
     legacy_pattern: bool,
     detection_strictness: str,
+    detector_settings: dict[str, object],
     error: object,
     all_rows: object,
 ) -> None:
@@ -100,6 +111,7 @@ def _write_calibration_report(
             "dict_size": dict_size,
             "legacy_pattern": legacy_pattern,
             "detection_strictness": detection_strictness,
+            "detection_retry": detector_settings,
         },
         "mean_reprojection_error": _finite_float(error),
         "detected_rows": _row_count(all_rows),
@@ -133,7 +145,7 @@ def _validate_detected_rows(
     marker_bits: int,
     dict_size: int,
 ) -> None:
-    row_counts = [len(rows) for rows in all_rows]
+    row_counts = [sum(1 for row in rows if _detection_count(row.get("corners")) > 0) for rows in all_rows]
     if not any(row_counts):
         raise ValueError(
             "no Charuco boards were detected in any calibration video. "
@@ -175,24 +187,79 @@ def _configure_charuco_legacy_pattern(board: object, enabled: bool) -> None:
     log_info("Calibration ChArUco legacy pattern: enabled.")
 
 
-def _enable_low_resolution_charuco_detection(board: object, *, detection_strictness: str) -> None:
+def _detection_count(values: object) -> int:
+    if values is None:
+        return 0
+    try:
+        return len(values)  # type: ignore[arg-type]
+    except TypeError:
+        return 0
+
+
+def _enable_low_resolution_charuco_detection(
+    board: object,
+    *,
+    detection_strictness: str,
+    retry_scale: float | None = None,
+    minimum_markers: int | None = None,
+    retry_sharpen: bool = False,
+) -> dict[str, object]:
     settings = {
         "strict": None,
         "balanced": {"scale": 2.0, "minimum_markers": 8, "sharpen": False},
         "lenient": {"scale": 3.0, "minimum_markers": 12, "sharpen": True},
     }.get(detection_strictness)
-    if settings is None:
+    if settings is None and retry_scale is None and minimum_markers is None and not retry_sharpen:
         log_info("Calibration marker detector strictness: strict.")
-        return
+        return {"enabled": False, "strictness": detection_strictness}
 
-    scale = settings["scale"]
-    minimum_markers = settings["minimum_markers"]
-    sharpen = settings["sharpen"]
+    if settings is None:
+        settings = {"scale": 2.0, "minimum_markers": 8, "sharpen": False}
+
+    scale = retry_scale if retry_scale is not None else settings["scale"]
+    if scale <= 1.0 or scale > 5.0:
+        raise ValueError("--charuco-retry-scale must be greater than 1.0 and no more than 5.0.")
+
+    marker_floor = minimum_markers if minimum_markers is not None else settings["minimum_markers"]
+    if marker_floor < 1:
+        raise ValueError("--charuco-min-markers must be at least 1.")
+
+    sharpen = bool(settings["sharpen"] or retry_sharpen)
     original_detect_markers = board.detect_markers
+    original_detect_image = board.detect_image
+
+    def retry_image(image):
+        try:
+            import cv2
+        except ModuleNotFoundError:
+            return None
+
+        enlarged = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        if sharpen:
+            blur = cv2.GaussianBlur(enlarged, (0, 0), 1.0)
+            enlarged = cv2.addWeighted(enlarged, 1.6, blur, -0.6, 0)
+        return enlarged
 
     def detect_markers_with_retry(self, image, camera=None, refine=True):
         corners, ids = original_detect_markers(image, camera=camera, refine=refine)
-        if ids is not None and len(ids) >= minimum_markers:
+        original_count = _detection_count(ids)
+        if original_count >= marker_floor:
+            return corners, ids
+
+        enlarged = retry_image(image)
+        if enlarged is None:
+            return corners, ids
+
+        scaled_corners, scaled_ids = original_detect_markers(enlarged, camera=camera, refine=refine)
+        if _detection_count(scaled_ids) <= original_count:
+            return corners, ids
+
+        corrected_corners = [marker_corners / scale for marker_corners in scaled_corners]
+        return corrected_corners, scaled_ids
+
+    def detect_image_with_retry(self, image, camera=None):
+        corners, ids = original_detect_image(image, camera=camera)
+        if _detection_count(corners) > 0:
             return corners, ids
 
         try:
@@ -200,22 +267,51 @@ def _enable_low_resolution_charuco_detection(board: object, *, detection_strictn
         except ModuleNotFoundError:
             return corners, ids
 
-        enlarged = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-        if sharpen:
-            blur = cv2.GaussianBlur(enlarged, (0, 0), 1.0)
-            enlarged = cv2.addWeighted(enlarged, 1.6, blur, -0.6, 0)
-        scaled_corners, scaled_ids = original_detect_markers(enlarged, camera=camera, refine=refine)
-        if scaled_ids is None or len(scaled_ids) <= (0 if ids is None else len(ids)):
+        enlarged = retry_image(image)
+        if enlarged is None:
             return corners, ids
 
-        corrected_corners = [marker_corners / scale for marker_corners in scaled_corners]
+        scaled_marker_corners, scaled_marker_ids = original_detect_markers(enlarged, camera=camera, refine=True)
+        if _detection_count(scaled_marker_corners) == 0:
+            return corners, ids
+
+        if len(enlarged.shape) == 3:
+            gray = cv2.cvtColor(enlarged, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = enlarged
+
+        _, scaled_corners, scaled_ids = cv2.aruco.interpolateCornersCharuco(
+            scaled_marker_corners,
+            scaled_marker_ids,
+            gray,
+            self.board,
+        )
+        if _detection_count(scaled_corners) == 0:
+            return corners, ids
+
+        corrected_corners = scaled_corners / scale
+        if (
+            getattr(self, "manually_verify", False)
+            and not self.manually_verify_board_detection(image, corrected_corners, scaled_ids)
+        ):
+            return corners, ids
+
         return corrected_corners, scaled_ids
 
     board.detect_markers = MethodType(detect_markers_with_retry, board)
+    board.detect_image = MethodType(detect_image_with_retry, board)
     log_info(
         f"Calibration marker detector strictness: {detection_strictness}; "
-        f"retrying weak frames at {scale:.1f}x."
+        f"retrying weak frames at {scale:.1f}x, marker floor {marker_floor}, "
+        f"sharpen {'on' if sharpen else 'off'}."
     )
+    return {
+        "enabled": True,
+        "strictness": detection_strictness,
+        "scale": scale,
+        "minimum_markers": marker_floor,
+        "sharpen": sharpen,
+    }
 
 
 def _load_calibration_classes():

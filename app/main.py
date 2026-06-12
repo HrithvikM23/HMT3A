@@ -47,14 +47,15 @@ def main() -> None:
     args = parser.parse_args()
     apply_runtime_profile(args, explicit_dests)
 
-    try:
-        ensure_runtime_ready(check_only=bool(args.dry_run or args.runtime_check))
-    except subprocess.CalledProcessError as exc:
-        log_error(f"Runtime dependency installation failed with exit code {exc.returncode}. See the run log above.")
-        raise SystemExit(1) from exc
-    except Exception as exc:
-        log_error(f"Runtime check failed: {exc}")
-        raise SystemExit(1) from exc
+    if not args.skip_runtime_check:
+        try:
+            ensure_runtime_ready(check_only=bool(args.dry_run))
+        except subprocess.CalledProcessError as exc:
+            log_error(f"Runtime dependency installation failed with exit code {exc.returncode}. See the run log above.")
+            raise SystemExit(1) from exc
+        except Exception as exc:
+            log_error(f"Runtime check failed: {exc}")
+            raise SystemExit(1) from exc
 
     from runners.fused import run_fused_assignments
     from runners.single import run_assignment
@@ -63,7 +64,7 @@ def main() -> None:
     if args.runtime_check:
         dry_assignment = type("Assignment", (), {"source": 0, "label": "CAM_0"})()
         config = _checked_config(build_config_for_assignment, args, dry_assignment, False)
-        if not prepare_runtime_config(config, prepare_assets=False):
+        if not prepare_runtime_config(config, prepare_assets=True):
             raise SystemExit(1)
         return
 
@@ -102,6 +103,9 @@ def main() -> None:
                 dict_size=args.charuco_dict_size,
                 legacy_pattern=args.charuco_legacy_pattern,
                 detection_strictness=args.charuco_detection_strictness,
+                retry_scale=args.charuco_retry_scale,
+                minimum_markers=args.charuco_min_markers,
+                retry_sharpen=args.charuco_retry_sharpen,
             )
         except Exception as exc:
             safe_print(f"Error: camera calibration failed: {exc}")

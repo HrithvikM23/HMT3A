@@ -36,9 +36,81 @@ def _valid_python_executable(candidate: str) -> str | None:
     path = Path(candidate.strip().strip('"').strip("'"))
     if path.is_dir():
         path = path / "python.exe"
-    if path.exists() and path.name.lower() == "python.exe":
-        return str(path)
-    return None
+    if not path.exists() or path.name.lower() != "python.exe":
+        return None
+    try:
+        completed = subprocess.run(
+            [str(path), "-c", "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else 1)"],
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return str(path) if completed.returncode == 0 else None
+
+
+def _python_from_launcher() -> str:
+    launcher = shutil.which("py")
+    if not launcher:
+        return ""
+    try:
+        completed = subprocess.run(
+            [launcher, "-3.11", "-c", "import sys; print(sys.executable)"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return completed.stdout.strip() if completed.returncode == 0 else ""
+
+
+def _registry_python_candidates() -> list[str]:
+    if sys.platform != "win32":
+        return []
+    try:
+        import winreg
+    except ImportError:
+        return []
+
+    candidates: list[str] = []
+    keys = (
+        (winreg.HKEY_CURRENT_USER, r"Software\Python\PythonCore\3.11\InstallPath"),
+        (winreg.HKEY_LOCAL_MACHINE, r"Software\Python\PythonCore\3.11\InstallPath"),
+        (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Python\PythonCore\3.11\InstallPath"),
+    )
+    for hive, key_path in keys:
+        try:
+            with winreg.OpenKey(hive, key_path) as key:
+                install_path, _ = winreg.QueryValueEx(key, "")
+        except OSError:
+            continue
+        candidates.append(str(Path(install_path) / "python.exe"))
+    return candidates
+
+
+def _common_python_candidates() -> list[str]:
+    candidates: list[str] = []
+    for executable in ("python3.11", "python"):
+        found = shutil.which(executable)
+        if found:
+            candidates.append(found)
+    candidates.append(_python_from_launcher())
+
+    if sys.platform == "win32":
+        roots = [
+            os.environ.get("LOCALAPPDATA", ""),
+            os.environ.get("ProgramFiles", ""),
+            os.environ.get("ProgramFiles(x86)", ""),
+        ]
+        for root in roots:
+            if root:
+                candidates.append(str(Path(root) / "Programs" / "Python" / "Python311" / "python.exe"))
+                candidates.append(str(Path(root) / "Python311" / "python.exe"))
+        candidates.extend(_registry_python_candidates())
+    return candidates
 
 
 def installer_python() -> str:
@@ -46,6 +118,7 @@ def installer_python() -> str:
         os.environ.get("KINARA_PYTHON", ""),
         getattr(sys, "_base_executable", ""),
         sys.executable,
+        *_common_python_candidates(),
     )
     for candidate in candidates:
         resolved = _valid_python_executable(candidate)

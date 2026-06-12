@@ -131,6 +131,20 @@ class CoreLogicTests(unittest.TestCase):
         self.assertTrue(ensure_runtime_ready.call_args.kwargs["check_only"])
         run_assignment.assert_not_called()
 
+    def test_skip_runtime_check_bypasses_bootstrap(self) -> None:
+        from app import main as app_main
+
+        argv = ["kinara", "--source", "0", "--skip-runtime-check", "--no-preview", "--output-basename", "skip"]
+        with (
+            patch.object(sys, "argv", argv),
+            patch.object(app_main, "ensure_runtime_ready") as ensure_runtime_ready,
+            patch("runners.single.run_assignment") as run_assignment,
+        ):
+            app_main.main()
+
+        ensure_runtime_ready.assert_not_called()
+        run_assignment.assert_called_once()
+
     def test_pipeline_config_allocates_metadata_path(self) -> None:
         config = PipelineConfig(output_basename="metadata_test")
 
@@ -156,6 +170,20 @@ class CoreLogicTests(unittest.TestCase):
             installer = bootstrap_packages.installer_python()
 
         self.assertEqual(Path(installer).resolve(), Path(sys.executable).resolve())
+
+    def test_installer_python_discovers_path_python(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+
+        original_python = sys.executable
+        with (
+            patch.dict(os.environ, {"KINARA_PYTHON": ""}, clear=False),
+            patch.object(bootstrap_packages.sys, "_base_executable", "", create=True),
+            patch.object(bootstrap_packages.sys, "executable", "Kinara.exe"),
+            patch.object(bootstrap_packages, "_common_python_candidates", return_value=[original_python]),
+        ):
+            installer = bootstrap_packages.installer_python()
+
+        self.assertEqual(Path(installer).resolve(), Path(original_python).resolve())
 
     def test_calibration_mode_requests_calibration_runtime_modules(self) -> None:
         from utils.bootstrap_dependencies import _selected_runtime_modules
@@ -188,6 +216,112 @@ class CoreLogicTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "no Charuco boards were detected"):
             _validate_detected_rows([[], []], ["CAM_0", "CAM_1"], marker_bits=4, dict_size=250)
+
+    def test_calibration_empty_corner_rows_raise_actionable_error(self) -> None:
+        from utils.calibration import _validate_detected_rows
+
+        rows = [[{"corners": np.float64([]), "ids": np.float64([])}], []]
+
+        with self.assertRaisesRegex(ValueError, "no Charuco boards were detected"):
+            _validate_detected_rows(rows, ["CAM_0", "CAM_1"], marker_bits=4, dict_size=250)
+
+    def test_cli_charuco_retry_overrides_parse(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "--source", "a.mp4",
+            "--source", "b.mp4",
+            "--calibrate-cameras",
+            "--charuco-retry-scale", "3.5",
+            "--charuco-min-markers", "6",
+            "--charuco-retry-sharpen",
+        ])
+
+        self.assertEqual(args.charuco_retry_scale, 3.5)
+        self.assertEqual(args.charuco_min_markers, 6)
+        self.assertTrue(args.charuco_retry_sharpen)
+
+    def test_low_resolution_charuco_detection_retries_empty_marker_list(self) -> None:
+        from utils.calibration import _enable_low_resolution_charuco_detection
+
+        class FakeBoard:
+            def __init__(self) -> None:
+                self.detected_shapes = []
+                self.board = object()
+
+            def detect_markers(self, image, camera=None, refine=True):
+                self.detected_shapes.append(image.shape)
+                if image.shape[0] < 20:
+                    return [], []
+                return [np.array([[[6.0, 8.0]]], dtype=np.float32)], np.array([[1]], dtype=np.int32)
+
+            def detect_image(self, image, camera=None):
+                return np.float64([]), np.float64([])
+
+        board = FakeBoard()
+
+        _enable_low_resolution_charuco_detection(board, detection_strictness="balanced")
+        corners, ids = board.detect_markers(np.zeros((10, 12), dtype=np.uint8))
+
+        self.assertEqual([shape[:2] for shape in board.detected_shapes], [(10, 12), (20, 24)])
+        self.assertEqual(ids.tolist(), [[1]])
+        self.assertEqual(corners[0].tolist(), [[[3.0, 4.0]]])
+
+    def test_low_resolution_charuco_detection_uses_retry_overrides(self) -> None:
+        from utils.calibration import _enable_low_resolution_charuco_detection
+
+        class FakeBoard:
+            def detect_markers(self, image, camera=None, refine=True):
+                return [], []
+
+            def detect_image(self, image, camera=None):
+                return np.float64([]), np.float64([])
+
+        settings = _enable_low_resolution_charuco_detection(
+            FakeBoard(),
+            detection_strictness="strict",
+            retry_scale=2.5,
+            minimum_markers=4,
+            retry_sharpen=True,
+        )
+
+        self.assertEqual(
+            settings,
+            {
+                "enabled": True,
+                "strictness": "strict",
+                "scale": 2.5,
+                "minimum_markers": 4,
+                "sharpen": True,
+            },
+        )
+
+    def test_low_resolution_charuco_detection_retries_corner_interpolation(self) -> None:
+        from utils.calibration import _enable_low_resolution_charuco_detection
+
+        class FakeBoard:
+            def __init__(self) -> None:
+                self.board = object()
+                self.manually_verify = False
+                self.marker_shapes = []
+
+            def detect_markers(self, image, camera=None, refine=True):
+                self.marker_shapes.append(image.shape)
+                return [np.array([[[10.0, 14.0]]], dtype=np.float32)], np.array([[2]], dtype=np.int32)
+
+            def detect_image(self, image, camera=None):
+                return np.float64([]), np.float64([])
+
+        board = FakeBoard()
+        scaled_corners = np.array([[[20.0, 24.0]]], dtype=np.float32)
+        scaled_ids = np.array([[3]], dtype=np.int32)
+
+        with patch("cv2.aruco.interpolateCornersCharuco", return_value=(1, scaled_corners, scaled_ids)):
+            _enable_low_resolution_charuco_detection(board, detection_strictness="balanced")
+            corners, ids = board.detect_image(np.zeros((10, 12, 3), dtype=np.uint8))
+
+        self.assertEqual(corners.tolist(), [[[10.0, 12.0]]])
+        self.assertEqual(ids.tolist(), [[3]])
+        self.assertEqual(board.marker_shapes[-1][:2], (20, 24))
 
     def test_mediapipe_install_plan_pins_protobuf(self) -> None:
         from utils.bootstrap_packages import resolve_install_plan
