@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-import math
+import csv
 import importlib
+import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from utils.skeleton import BODY_FOOT_NAME_TO_INDEX, BODY_NAME_TO_INDEX, HAND_NAME_TO_INDEX, JointMap, Point
+from utils.skeleton import BODY_FOOT_NAME_TO_INDEX, BODY_NAME_TO_INDEX, HAND_NAME_TO_INDEX, Point
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +18,11 @@ class TriangulationResult:
     joint_overrides_by_frame: list[dict[str, dict[str, float]]]
     camera_labels: list[str]
     joint_names: list[str]
+    points_2d_xy: np.ndarray
+    points_3d_xyz: np.ndarray
+    confidences: np.ndarray
+    reprojection_error: np.ndarray | None
+    full_reprojection_error: np.ndarray | None
     mean_reprojection_error: float | None
     triangulated_point_count: int
 
@@ -81,13 +88,27 @@ def triangulate_observation_frames(
             minimum_cameras_for_triangulation=minimum_cameras,
         )
 
-    reprojection_error, reprojection_errors = _reprojection_errors(camera_group, points_3d_flat, flat_points)
+    reprojection_error, full_reprojection_error, mean_reprojection_error = _reprojection_errors(
+        camera_group,
+        points_3d_flat,
+        flat_points,
+        frame_count=len(observation_frames),
+        tracked_point_count=len(TRIANGULATION_JOINT_NAMES),
+    )
     points_3d = points_3d_flat.reshape(len(observation_frames), len(TRIANGULATION_JOINT_NAMES), 3)
-    if max_reprojection_error is not None and reprojection_errors is not None:
-        bad_points = reprojection_errors.reshape(len(observation_frames), len(TRIANGULATION_JOINT_NAMES)) > max_reprojection_error
+    if max_reprojection_error is not None and reprojection_error is not None:
+        bad_points = reprojection_error > max_reprojection_error
         points_3d[bad_points] = np.nan
     points_3d = _smooth_points_3d(points_3d, confidences, smoothing_alpha)
-    return _build_result(points_3d, confidences, camera_labels, reprojection_error)
+    return _build_result(
+        points_2d,
+        points_3d,
+        confidences,
+        camera_labels,
+        reprojection_error,
+        full_reprojection_error,
+        mean_reprojection_error,
+    )
 
 
 def apply_triangulated_overrides(
@@ -95,7 +116,7 @@ def apply_triangulated_overrides(
     triangulation_result: TriangulationResult,
 ) -> list[dict[str, object]]:
     updated_frames: list[dict[str, object]] = []
-    for frame, overrides in zip(motion_frames, triangulation_result.joint_overrides_by_frame):
+    for frame, overrides in zip(motion_frames, triangulation_result.joint_overrides_by_frame, strict=True):
         joints = frame.get("joints")
         if not isinstance(joints, dict):
             updated_frames.append(frame)
@@ -127,6 +148,82 @@ def triangulation_metadata(result: TriangulationResult) -> dict[str, object]:
         "triangulated_point_count": result.triangulated_point_count,
         "mean_reprojection_error": result.mean_reprojection_error,
     }
+
+
+def export_freemocap_style_output(output_root: Path, result: TriangulationResult) -> dict[str, str]:
+    output_data_dir = output_root / "output_data"
+    raw_data_dir = output_data_dir / "raw_data"
+    raw_data_dir.mkdir(parents=True, exist_ok=True)
+
+    skeleton_path = output_data_dir / "skeleton_3d.npy"
+    raw_2d_path = raw_data_dir / "kinara_2dData_numCams_numFrames_numTrackedPoints_pixelXY.npy"
+    raw_skeleton_path = raw_data_dir / "kinara_3dData_numFrames_numTrackedPoints_spatialXYZ.npy"
+    reprojection_error_path = raw_data_dir / "kinara_3dData_numFrames_numTrackedPoints_reprojectionError.npy"
+    full_reprojection_error_path = raw_data_dir / "kinara_3dData_numCams_numFrames_numTrackedPoints_reprojectionError.npy"
+    confidence_path = raw_data_dir / "kinara_3dData_numFrames_numTrackedPoints_confidence.npy"
+    names_path = raw_data_dir / "tracked_point_names.json"
+    csv_path = output_data_dir / "skeleton_3d_xyz.csv"
+    metadata_path = output_data_dir / "triangulation_metadata.json"
+
+    np.save(skeleton_path, result.points_3d_xyz)
+    np.save(raw_2d_path, result.points_2d_xy)
+    np.save(raw_skeleton_path, result.points_3d_xyz)
+    if result.reprojection_error is not None:
+        np.save(reprojection_error_path, result.reprojection_error)
+    if result.full_reprojection_error is not None:
+        np.save(full_reprojection_error_path, result.full_reprojection_error)
+    np.save(confidence_path, result.confidences)
+    names_path.write_text(json.dumps(result.joint_names, indent=2), encoding="utf-8")
+    _write_freemocap_style_csv(csv_path, result)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "format": "kinara-freemocap-style-calibrated-output-v1",
+                "array_shape": list(result.points_3d_xyz.shape),
+                "axis_order": "XYZ",
+                "camera_labels": result.camera_labels,
+                "joint_names": result.joint_names,
+                "mean_reprojection_error": result.mean_reprojection_error,
+                "triangulated_point_count": result.triangulated_point_count,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "output_data": str(output_data_dir),
+        "skeleton_3d_npy": str(skeleton_path),
+        "raw_2d_npy": str(raw_2d_path),
+        "raw_skeleton_3d_npy": str(raw_skeleton_path),
+        "reprojection_error_npy": str(reprojection_error_path),
+        "full_reprojection_error_npy": str(full_reprojection_error_path),
+        "confidence_npy": str(confidence_path),
+        "tracked_point_names": str(names_path),
+        "skeleton_3d_csv": str(csv_path),
+        "metadata": str(metadata_path),
+    }
+
+
+def _write_freemocap_style_csv(output_path: Path, result: TriangulationResult) -> None:
+    with output_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["frame", "tracked_point", "x", "y", "z", "confidence"])
+        for frame_index in range(result.points_3d_xyz.shape[0]):
+            for point_index, joint_name in enumerate(result.joint_names):
+                x, y, z = result.points_3d_xyz[frame_index, point_index]
+                confidence = result.confidences[frame_index, point_index]
+                writer.writerow([
+                    frame_index,
+                    joint_name,
+                    _csv_float(x),
+                    _csv_float(y),
+                    _csv_float(z),
+                    _csv_float(confidence),
+                ])
+
+
+def _csv_float(value: float) -> str:
+    return "" if not math.isfinite(float(value)) else f"{float(value):.8f}"
 
 
 def _load_camera_group_class():
@@ -248,14 +345,42 @@ def _fill_point(
     confidences[frame_index, joint_offset] = max(confidences[frame_index, joint_offset], float(confidence))
 
 
-def _reprojection_errors(camera_group, points_3d_flat: np.ndarray, flat_points: np.ndarray) -> tuple[float | None, np.ndarray | None]:
+def _reprojection_errors(
+    camera_group,
+    points_3d_flat: np.ndarray,
+    flat_points: np.ndarray,
+    *,
+    frame_count: int,
+    tracked_point_count: int,
+) -> tuple[np.ndarray | None, np.ndarray | None, float | None]:
     if not hasattr(camera_group, "reprojection_error"):
-        return None, None
-    reprojection_error = np.asarray(camera_group.reprojection_error(points_3d_flat, flat_points, mean=True))
+        return None, None, None
+    reprojection_error_flat = np.asarray(camera_group.reprojection_error(points_3d_flat, flat_points, mean=True))
+    reprojection_error = reprojection_error_flat.reshape(frame_count, tracked_point_count)
+    full_reprojection_error = _full_reprojection_error(camera_group, points_3d_flat, flat_points, frame_count, tracked_point_count)
     finite_error = reprojection_error[np.isfinite(reprojection_error)]
     if finite_error.size == 0:
-        return None, reprojection_error
-    return float(np.mean(finite_error)), reprojection_error
+        return reprojection_error, full_reprojection_error, None
+    return reprojection_error, full_reprojection_error, float(np.mean(finite_error))
+
+
+def _full_reprojection_error(
+    camera_group,
+    points_3d_flat: np.ndarray,
+    flat_points: np.ndarray,
+    frame_count: int,
+    tracked_point_count: int,
+) -> np.ndarray | None:
+    try:
+        full_error = np.asarray(camera_group.reprojection_error(points_3d_flat, flat_points, mean=False))
+    except Exception:
+        return None
+    if full_error.ndim == 3 and full_error.shape[-1] == 2:
+        full_error = np.linalg.norm(full_error, axis=2)
+    try:
+        return full_error.reshape(flat_points.shape[0], frame_count, tracked_point_count)
+    except ValueError:
+        return None
 
 
 def _smooth_points_3d(points_3d: np.ndarray, confidences: np.ndarray, smoothing_alpha: float) -> np.ndarray:
@@ -281,9 +406,12 @@ def _smooth_points_3d(points_3d: np.ndarray, confidences: np.ndarray, smoothing_
 
 
 def _build_result(
+    points_2d: np.ndarray,
     points_3d: np.ndarray,
     confidences: np.ndarray,
     camera_labels: list[str],
+    reprojection_error: np.ndarray | None,
+    full_reprojection_error: np.ndarray | None,
     mean_reprojection_error: float | None,
 ) -> TriangulationResult:
     overrides_by_frame: list[dict[str, dict[str, float]]] = []
@@ -307,6 +435,11 @@ def _build_result(
         joint_overrides_by_frame=overrides_by_frame,
         camera_labels=camera_labels,
         joint_names=list(TRIANGULATION_JOINT_NAMES),
+        points_2d_xy=points_2d.copy(),
+        points_3d_xyz=points_3d.copy(),
+        confidences=confidences.copy(),
+        reprojection_error=None if reprojection_error is None else reprojection_error.copy(),
+        full_reprojection_error=None if full_reprojection_error is None else full_reprojection_error.copy(),
         mean_reprojection_error=mean_reprojection_error,
         triangulated_point_count=triangulated_count,
     )

@@ -1,34 +1,46 @@
 from __future__ import annotations
 
 import io
+import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
-import json
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import patch
 
 import numpy as np
 
-from cli import InputAssignment, build_parser, explicit_option_dests, resolve_sources
-from config import PipelineConfig
+from core.cli import InputAssignment, build_parser, explicit_option_dests, resolve_sources
+from core.config import PipelineConfig
+from core.config_file import load_config_defaults
+from core.runtime_config import (
+    build_config_for_assignment,
+    prepare_model_assets,
+    select_reference_assignment,
+    validate_config,
+)
+from core.runtime_profiles import apply_runtime_profile
 from inference.rtmpose import ONNXPoseHandRunner
+from pipeline.pipeline import PoseHandPipeline
 from runners.fused_alignment import align_people_across_cameras
-from runtime_config import build_config_for_assignment, prepare_model_assets, select_reference_assignment
-from runtime_profiles import apply_runtime_profile
 from utils.body_geometry import derive_foot_points
-from utils.fusion import DEFAULT_CAMERA_CALIBRATION, fuse_body_views, load_camera_calibrations
-from utils.fps import FpsMeter, draw_fps_overlay
-from utils.normalize import build_hand_box
 from utils.color_profile import color_profile_similarity
 from utils.exports import build_joint_map, export_motion_json
+from utils.fps import FpsMeter, draw_fps_overlay
+from utils.fusion import DEFAULT_CAMERA_CALIBRATION, fuse_body_views, load_camera_calibrations
 from utils.hand_fallback import anchor_hand_to_wrist, has_usable_hand_detection, is_hand_detection_valid
+from utils.hand_tracking import hand_detection_score, predict_hand_payload
 from utils.motion_cleanup import cleanup_motion_frames
+from utils.normalize import build_hand_box
 from utils.prediction import predict_points, translate_points
+from utils.preview_stream import PreviewFrameSink
 from utils.skeleton import JointMap
 from utils.triangulation import apply_triangulated_overrides, triangulate_observation_frames
-from pipeline.pipeline import PoseHandPipeline
 
 
 def _body_points() -> list[tuple[int, int, float]]:
@@ -49,16 +61,377 @@ def _body_points() -> list[tuple[int, int, float]]:
 
 
 class CoreLogicTests(unittest.TestCase):
+    def test_module_help_smoke(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-m", "kinara", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--source", completed.stdout)
+        self.assertIn("--landmark-backend", completed.stdout)
+
+    def test_cli_entrypoint_dispatches_single_assignment(self) -> None:
+        from app import main as app_main
+
+        argv = ["kinara", "--source", "0", "--no-preview", "--output-basename", "smoke"]
+        with (
+            patch.object(sys, "argv", argv),
+            patch.object(app_main, "ensure_runtime_ready") as ensure_runtime_ready,
+            patch("runners.single.run_assignment") as run_assignment,
+        ):
+            app_main.main()
+
+        ensure_runtime_ready.assert_called_once()
+        run_assignment.assert_called_once()
+        config = run_assignment.call_args.args[0]
+        self.assertEqual(config.video_path, 0)
+        self.assertFalse(config.enable_preview)
+        self.assertEqual(config.output_basename, "smoke")
+
+    def test_config_file_defaults_can_be_overridden(self) -> None:
+        parser = build_parser()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "kinara.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "source": ["0"],
+                        "output_basename": "from_config",
+                        "benchmark_frames": 5,
+                        "no_preview": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config_dests = load_config_defaults(parser, config_path)
+            args = parser.parse_args(["--config", str(config_path), "--output-basename", "from_cli"])
+
+        self.assertIn("benchmark_frames", config_dests)
+        self.assertEqual(args.source, ["0"])
+        self.assertEqual(args.output_basename, "from_cli")
+        self.assertEqual(args.benchmark_frames, 5)
+        self.assertTrue(args.no_preview)
+
+    def test_dry_run_does_not_dispatch_runner(self) -> None:
+        from app import main as app_main
+
+        argv = ["kinara", "--source", "0", "--dry-run", "--no-preview", "--output-basename", "dry"]
+        with (
+            patch.object(sys, "argv", argv),
+            patch.object(app_main, "ensure_runtime_ready") as ensure_runtime_ready,
+            patch("runners.single.run_assignment") as run_assignment,
+        ):
+            app_main.main()
+
+        ensure_runtime_ready.assert_called_once()
+        self.assertTrue(ensure_runtime_ready.call_args.kwargs["check_only"])
+        run_assignment.assert_not_called()
+
+    def test_skip_runtime_check_bypasses_bootstrap(self) -> None:
+        from app import main as app_main
+
+        argv = ["kinara", "--source", "0", "--skip-runtime-check", "--no-preview", "--output-basename", "skip"]
+        with (
+            patch.object(sys, "argv", argv),
+            patch.object(app_main, "ensure_runtime_ready") as ensure_runtime_ready,
+            patch("runners.single.run_assignment") as run_assignment,
+        ):
+            app_main.main()
+
+        ensure_runtime_ready.assert_not_called()
+        run_assignment.assert_called_once()
+
+    def test_pipeline_config_allocates_metadata_path(self) -> None:
+        config = PipelineConfig(output_basename="metadata_test")
+
+        self.assertTrue(config.metadata_output_path.name.startswith("metadata_test metadata-"))
+        self.assertTrue(config.metadata_output_path.name.endswith(".json"))
+
+    def test_installer_python_does_not_default_to_blender_python(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+
+        with (
+            patch.dict(os.environ, {"KINARA_PYTHON": ""}, clear=False),
+            patch.object(bootstrap_packages.sys, "_base_executable", "", create=True),
+        ):
+            installer = bootstrap_packages.installer_python()
+
+        self.assertEqual(Path(installer).resolve(), Path(sys.executable).resolve())
+
+    def test_installer_python_accepts_python_directory(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+
+        python_dir = str(Path(sys.executable).parent)
+        with patch.dict(os.environ, {"KINARA_PYTHON": python_dir}, clear=False):
+            installer = bootstrap_packages.installer_python()
+
+        self.assertEqual(Path(installer).resolve(), Path(sys.executable).resolve())
+
+    def test_installer_python_discovers_path_python(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+
+        original_python = sys.executable
+        with (
+            patch.dict(os.environ, {"KINARA_PYTHON": ""}, clear=False),
+            patch.object(bootstrap_packages.sys, "_base_executable", "", create=True),
+            patch.object(bootstrap_packages.sys, "executable", "Kinara.exe"),
+            patch.object(bootstrap_packages, "_common_python_candidates", return_value=[original_python]),
+        ):
+            installer = bootstrap_packages.installer_python()
+
+        self.assertEqual(Path(installer).resolve(), Path(original_python).resolve())
+
+    def test_calibration_mode_requests_calibration_runtime_modules(self) -> None:
+        from utils.bootstrap_dependencies import _selected_runtime_modules
+
+        modules = _selected_runtime_modules(["--calibrate-cameras", "--source", "CAM_0=a.mp4", "--source", "CAM_1=b.mp4"])
+
+        self.assertIn("aniposelib", modules)
+        self.assertIn("cv2", modules)
+
+    def test_calibration_install_plan_uses_contrib_opencv_and_numpy_pin(self) -> None:
+        from utils.bootstrap_packages import resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        plan = resolve_install_plan(
+            [
+                ModuleStatus("aniposelib", False),
+                ModuleStatus("cv2", False),
+                ModuleStatus("numpy", False),
+            ],
+            RuntimeReport(),
+        )
+
+        self.assertIn("aniposelib>=0.7,<0.8", plan)
+        self.assertIn("numpy>=1.26,<2.0", plan)
+        self.assertIn("opencv-contrib-python>=4.9,<4.12", plan)
+        self.assertIn("protobuf>=4.25.3,<5", plan)
+
+    def test_calibration_empty_detections_raise_actionable_error(self) -> None:
+        from utils.calibration import _validate_detected_rows
+
+        with self.assertRaisesRegex(ValueError, "no Charuco boards were detected"):
+            _validate_detected_rows([[], []], ["CAM_0", "CAM_1"], marker_bits=4, dict_size=250)
+
+    def test_calibration_empty_corner_rows_raise_actionable_error(self) -> None:
+        from utils.calibration import _validate_detected_rows
+
+        rows = [[{"corners": np.float64([]), "ids": np.float64([])}], []]
+
+        with self.assertRaisesRegex(ValueError, "no Charuco boards were detected"):
+            _validate_detected_rows(rows, ["CAM_0", "CAM_1"], marker_bits=4, dict_size=250)
+
+    def test_cli_charuco_retry_overrides_parse(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "--source", "a.mp4",
+            "--source", "b.mp4",
+            "--calibrate-cameras",
+            "--charuco-retry-scale", "3.5",
+            "--charuco-min-markers", "6",
+            "--charuco-retry-sharpen",
+        ])
+
+        self.assertEqual(args.charuco_retry_scale, 3.5)
+        self.assertEqual(args.charuco_min_markers, 6)
+        self.assertTrue(args.charuco_retry_sharpen)
+
+    def test_low_resolution_charuco_detection_retries_empty_marker_list(self) -> None:
+        from utils.calibration import _enable_low_resolution_charuco_detection
+
+        class FakeBoard:
+            def __init__(self) -> None:
+                self.detected_shapes = []
+                self.board = object()
+
+            def detect_markers(self, image, camera=None, refine=True):
+                self.detected_shapes.append(image.shape)
+                if image.shape[0] < 20:
+                    return [], []
+                return [np.array([[[6.0, 8.0]]], dtype=np.float32)], np.array([[1]], dtype=np.int32)
+
+            def detect_image(self, image, camera=None):
+                return np.float64([]), np.float64([])
+
+        board = FakeBoard()
+
+        _enable_low_resolution_charuco_detection(board, detection_strictness="balanced")
+        corners, ids = board.detect_markers(np.zeros((10, 12), dtype=np.uint8))
+
+        self.assertEqual([shape[:2] for shape in board.detected_shapes], [(10, 12), (20, 24)])
+        self.assertEqual(ids.tolist(), [[1]])
+        self.assertEqual(corners[0].tolist(), [[[3.0, 4.0]]])
+
+    def test_low_resolution_charuco_detection_uses_retry_overrides(self) -> None:
+        from utils.calibration import _enable_low_resolution_charuco_detection
+
+        class FakeBoard:
+            def detect_markers(self, image, camera=None, refine=True):
+                return [], []
+
+            def detect_image(self, image, camera=None):
+                return np.float64([]), np.float64([])
+
+        settings = _enable_low_resolution_charuco_detection(
+            FakeBoard(),
+            detection_strictness="strict",
+            retry_scale=2.5,
+            minimum_markers=4,
+            retry_sharpen=True,
+        )
+
+        self.assertEqual(
+            settings,
+            {
+                "enabled": True,
+                "strictness": "strict",
+                "scale": 2.5,
+                "minimum_markers": 4,
+                "sharpen": True,
+            },
+        )
+
+    def test_low_resolution_charuco_detection_retries_corner_interpolation(self) -> None:
+        from utils.calibration import _enable_low_resolution_charuco_detection
+
+        class FakeBoard:
+            def __init__(self) -> None:
+                self.board = object()
+                self.manually_verify = False
+                self.marker_shapes = []
+
+            def detect_markers(self, image, camera=None, refine=True):
+                self.marker_shapes.append(image.shape)
+                return [np.array([[[10.0, 14.0]]], dtype=np.float32)], np.array([[2]], dtype=np.int32)
+
+            def detect_image(self, image, camera=None):
+                return np.float64([]), np.float64([])
+
+        board = FakeBoard()
+        scaled_corners = np.array([[[20.0, 24.0]]], dtype=np.float32)
+        scaled_ids = np.array([[3]], dtype=np.int32)
+
+        with patch("cv2.aruco.interpolateCornersCharuco", return_value=(1, scaled_corners, scaled_ids)):
+            _enable_low_resolution_charuco_detection(board, detection_strictness="balanced")
+            corners, ids = board.detect_image(np.zeros((10, 12, 3), dtype=np.uint8))
+
+        self.assertEqual(corners.tolist(), [[[10.0, 12.0]]])
+        self.assertEqual(ids.tolist(), [[3]])
+        self.assertEqual(board.marker_shapes[-1][:2], (20, 24))
+
+    def test_mediapipe_install_plan_pins_protobuf(self) -> None:
+        from utils.bootstrap_packages import resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        plan = resolve_install_plan([ModuleStatus("mediapipe", False)], RuntimeReport())
+
+        self.assertIn("mediapipe==0.10.21", plan)
+        self.assertIn("protobuf>=4.25.3,<5", plan)
+        self.assertIn("jax==0.7.1", plan)
+        self.assertIn("jaxlib==0.7.1", plan)
+
+    def test_mediapipe_install_plan_uses_single_opencv_flavor(self) -> None:
+        from utils.bootstrap_packages import resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        plan = resolve_install_plan(
+            [
+                ModuleStatus("cv2", False),
+                ModuleStatus("mediapipe", False),
+            ],
+            RuntimeReport(),
+        )
+
+        self.assertIn("opencv-contrib-python>=4.9,<4.12", plan)
+        self.assertNotIn("opencv-python", plan)
+        self.assertIn("mediapipe==0.10.21", plan)
+        self.assertEqual(plan.count("opencv-contrib-python>=4.9,<4.12"), 1)
+
+    def test_installed_mediapipe_repair_plan_pins_new_protobuf(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+        from utils.bootstrap_packages import resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        with patch.object(bootstrap_packages, "distribution_version", return_value="7.35.0"):
+            plan = resolve_install_plan([ModuleStatus("mediapipe", True)], RuntimeReport())
+
+        self.assertIn("protobuf>=4.25.3,<5", plan)
+
+    def test_install_packages_hides_user_site_packages_from_pip(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+
+        captured_envs = []
+
+        def fake_run(*_args, **kwargs):
+            captured_envs.append(kwargs.get("env", {}))
+            return subprocess.CompletedProcess(_args, 0)
+
+        with (
+            patch.object(bootstrap_packages, "installer_python", return_value=sys.executable),
+            patch.object(bootstrap_packages.subprocess, "run", side_effect=fake_run),
+            patch.object(bootstrap_packages, "prune_vendor_distributions"),
+            patch.object(bootstrap_packages, "prepend_pythonpath"),
+            patch.object(bootstrap_packages, "prepend_sys_path"),
+        ):
+            bootstrap_packages.install_packages(["example-package"])
+
+        self.assertTrue(captured_envs)
+        self.assertTrue(all(env.get("PYTHONNOUSERSITE") == "1" for env in captured_envs))
+
     def test_cli_defaults_build_config(self) -> None:
         parser = build_parser()
         args = parser.parse_args(["--source", "0", "--no-preview"])
         config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
 
         self.assertEqual(config.video_path, 0)
+        self.assertEqual(config.body_backend, "mediapipe")
+        self.assertEqual(config.hand_backend, "mediapipe")
         self.assertEqual(config.provider_names, ("CUDAExecutionProvider",))
         self.assertFalse(config.enable_preview)
         self.assertEqual(config.max_people, 1)
         self.assertEqual(config.body_detect_interval, 1)
+
+    def test_cli_rtmpose_backend_build_config(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "--source",
+            "0",
+            "--landmark-backend",
+            "rtmpose",
+            "--rtmpose-mode",
+            "lightweight",
+            "--rtmpose-device",
+            "cuda",
+            "--no-preview",
+        ])
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
+
+        self.assertEqual(config.body_backend, "rtmpose")
+        self.assertEqual(config.hand_backend, "onnx")
+        self.assertEqual(config.rtmpose_mode, "lightweight")
+        self.assertEqual(config.rtmpose_device, "cuda")
+
+    def test_cli_rtmpose_wholebody_locks_body_and_hand_backends(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "--source",
+            "0",
+            "--landmark-backend",
+            "rtmpose-wholebody",
+            "--body-backend",
+            "yolo",
+            "--hand-backend",
+            "onnx",
+            "--no-preview",
+        ])
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
+
+        self.assertEqual(config.body_backend, "rtmpose-wholebody")
+        self.assertEqual(config.hand_backend, "rtmpose-wholebody")
 
     def test_cli_speed_knobs_build_config(self) -> None:
         parser = build_parser()
@@ -97,6 +470,7 @@ class CoreLogicTests(unittest.TestCase):
         parser = build_parser()
         argv = [
             "--source", "0",
+            "--landmark-backend", "yolo",
             "--profile", "fastest",
             "--body-detect-interval", "1",
         ]
@@ -185,6 +559,11 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(config.hand_backend, "mediapipe")
         self.assertTrue(config.enable_backend_fallbacks)
 
+    def test_mediapipe_allows_multi_person_runner_path(self) -> None:
+        config = PipelineConfig(body_backend="mediapipe", hand_backend="mediapipe", max_people=2)
+
+        self.assertTrue(validate_config(config))
+
     def test_prepare_model_assets_skips_unused_models(self) -> None:
         config = PipelineConfig(body_backend="mediapipe", hand_backend="mediapipe")
 
@@ -223,7 +602,7 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(scale_x, 4.0)
         self.assertEqual(scale_y, 4.0)
 
-    def test_processing_width_is_used_by_body_and_hand_models(self) -> None:
+    def test_processing_width_keeps_hand_detection_on_source_frame(self) -> None:
         class Runner:
             last_body_depths = {}
             last_hand_depths = None
@@ -269,7 +648,7 @@ class CoreLogicTests(unittest.TestCase):
         self.assertIn("source 200x100 -> inference 50x25", stdout.getvalue())
         self.assertEqual(runner.body_frame_shape[:2], (25, 50))
         self.assertTrue(runner.hand_frame_shapes)
-        self.assertTrue(all(shape[:2] == (25, 50) for shape in runner.hand_frame_shapes))
+        self.assertTrue(all(shape[:2] == (100, 200) for shape in runner.hand_frame_shapes))
         self.assertEqual(body_points[5][0], 100)
         self.assertIn("left", hands_by_side)
 
@@ -502,6 +881,95 @@ class CoreLogicTests(unittest.TestCase):
         anchored = anchor_hand_to_wrist(raw_hand, wrist)
         self.assertTrue(is_hand_detection_valid(anchored, wrist, elbow, config))
 
+    def test_hand_detection_score_prefers_temporally_consistent_hand(self) -> None:
+        config = PipelineConfig()
+        wrist = (100, 100, 0.9)
+        elbow = (100, 150, 0.9)
+        stable = [
+            (100, 100, 0.9), (94, 86, 0.8), (90, 72, 0.8), (86, 58, 0.7), (82, 44, 0.7),
+            (96, 82, 0.8), (94, 64, 0.8), (92, 46, 0.7), (90, 30, 0.7),
+            (104, 80, 0.8), (104, 60, 0.8), (104, 42, 0.7), (104, 24, 0.7),
+            (112, 82, 0.8), (114, 64, 0.8), (116, 48, 0.7), (118, 34, 0.7),
+            (120, 88, 0.8), (126, 74, 0.8), (132, 60, 0.7), (138, 48, 0.7),
+        ]
+        jumpy = [(x + 90, y + 70, conf) for x, y, conf in stable]
+
+        stable_score = hand_detection_score(stable, wrist, elbow, config, previous_points=stable)
+        jumpy_score = hand_detection_score(jumpy, wrist, elbow, config, previous_points=stable)
+
+        self.assertGreater(stable_score, jumpy_score)
+
+    def test_predict_hand_payload_uses_wrist_and_elbow_motion(self) -> None:
+        previous_payload = {
+            "box": (90, 90, 150, 150),
+            "points": [(100, 100, 0.8)] * 21,
+        }
+
+        predicted = predict_hand_payload(
+            previous_payload,
+            previous_wrist=(100, 100, 0.9),
+            wrist_point=(110, 112, 0.9),
+            confidence_decay=0.5,
+            previous_elbow=(100, 150, 0.9),
+            elbow_point=(106, 158, 0.9),
+        )
+
+        self.assertIsNotNone(predicted)
+        assert predicted is not None
+        box, points, _ = predicted
+        self.assertEqual(box, (99, 101, 159, 161))
+        self.assertEqual(points[0], (109, 111, 0.4))
+
+    def test_preview_frame_sink_writes_latest_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            preview_path = Path(tmp_dir) / "preview.jpg"
+            old_path = os.environ.get("KINARA_PREVIEW_FRAME")
+            old_interval = os.environ.get("KINARA_PREVIEW_INTERVAL")
+            os.environ["KINARA_PREVIEW_FRAME"] = str(preview_path)
+            os.environ["KINARA_PREVIEW_INTERVAL"] = "1"
+            try:
+                sink = PreviewFrameSink()
+                frame = np.zeros((12, 16, 3), dtype=np.uint8)
+                frame[:, :, 1] = 255
+                sink.write(frame, 0)
+            finally:
+                if old_path is None:
+                    os.environ.pop("KINARA_PREVIEW_FRAME", None)
+                else:
+                    os.environ["KINARA_PREVIEW_FRAME"] = old_path
+                if old_interval is None:
+                    os.environ.pop("KINARA_PREVIEW_INTERVAL", None)
+                else:
+                    os.environ["KINARA_PREVIEW_INTERVAL"] = old_interval
+
+            frame_files = sorted(Path(tmp_dir).glob("preview_*.jpg"))
+            self.assertEqual(len(frame_files), 1)
+            self.assertGreater(frame_files[0].stat().st_size, 0)
+
+    def test_preview_frame_sink_ignores_locked_replace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            preview_path = Path(tmp_dir) / "preview.jpg"
+            old_path = os.environ.get("KINARA_PREVIEW_FRAME")
+            old_interval = os.environ.get("KINARA_PREVIEW_INTERVAL")
+            os.environ["KINARA_PREVIEW_FRAME"] = str(preview_path)
+            os.environ["KINARA_PREVIEW_INTERVAL"] = "1"
+            try:
+                sink = PreviewFrameSink()
+                frame = np.zeros((12, 16, 3), dtype=np.uint8)
+                with patch.object(Path, "replace", side_effect=PermissionError("locked")):
+                    sink.write(frame, 0)
+            finally:
+                if old_path is None:
+                    os.environ.pop("KINARA_PREVIEW_FRAME", None)
+                else:
+                    os.environ["KINARA_PREVIEW_FRAME"] = old_path
+                if old_interval is None:
+                    os.environ.pop("KINARA_PREVIEW_INTERVAL", None)
+                else:
+                    os.environ["KINARA_PREVIEW_INTERVAL"] = old_interval
+
+            self.assertEqual(list(Path(tmp_dir).glob("*.tmp.jpg")), [])
+
     def test_load_camera_calibrations_merges_uppercase_labels(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "calibration.json"
@@ -574,6 +1042,36 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(left_shoulder["x"], 105.0)
         self.assertEqual(left_shoulder["z"], 42.0)
         self.assertGreater(result.triangulated_point_count, 0)
+
+    def test_freemocap_style_output_writes_calibrated_arrays(self) -> None:
+        from utils.triangulation import TriangulationResult, export_freemocap_style_output
+
+        points_3d = np.array([[[1.0, 2.0, 3.0], [4.0, np.nan, 6.0]]], dtype=np.float64)
+        confidences = np.array([[0.9, 0.0]], dtype=np.float64)
+        result = TriangulationResult(
+            joint_overrides_by_frame=[],
+            camera_labels=["CAM_0", "CAM_1"],
+            joint_names=["A", "B"],
+            points_2d_xy=np.zeros((2, 1, 2, 2), dtype=np.float64),
+            points_3d_xyz=points_3d,
+            confidences=confidences,
+            reprojection_error=np.array([[0.1, np.nan]], dtype=np.float64),
+            full_reprojection_error=np.zeros((2, 1, 2), dtype=np.float64),
+            mean_reprojection_error=0.5,
+            triangulated_point_count=1,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = export_freemocap_style_output(Path(tmp_dir), result)
+            saved = np.load(paths["skeleton_3d_npy"])
+            csv_text = Path(paths["skeleton_3d_csv"]).read_text(encoding="utf-8")
+            self.assertTrue(Path(paths["raw_2d_npy"]).exists())
+            self.assertTrue(Path(paths["reprojection_error_npy"]).exists())
+            self.assertTrue(Path(paths["full_reprojection_error_npy"]).exists())
+
+        self.assertEqual(saved.shape, (1, 2, 3))
+        self.assertIn("frame,tracked_point,x,y,z,confidence", csv_text)
+        self.assertIn("0,A,1.00000000,2.00000000,3.00000000,0.90000000", csv_text)
 
     def test_export_motion_json_writes_metadata_and_frames(self) -> None:
         frame = {"frame_index": 0, "joints": build_joint_map(_body_points(), {})}

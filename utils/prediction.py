@@ -15,7 +15,7 @@ def predict_points(
         return decay_points(current_points, confidence_decay)
 
     predicted: list[Point] = []
-    for (x, y, conf), (prev_x, prev_y, _) in zip(current_points, previous_points):
+    for (x, y, conf), (prev_x, prev_y, _) in zip(current_points, previous_points, strict=True):
         predicted.append(
             (
                 int(round(x + (x - prev_x))),

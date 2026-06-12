@@ -5,7 +5,6 @@ from typing import cast
 
 from utils.skeleton import JointMap, JointValue
 
-
 FOOT_LOCK_JOINTS = ("LeftFoot", "LeftToeBase", "RightFoot", "RightToeBase")
 
 
@@ -115,7 +114,7 @@ def _interpolate_missing(frames: list[dict[str, object]]) -> None:
         ]
         if len(valid_indices) < 2:
             continue
-        for left_index, right_index in zip(valid_indices, valid_indices[1:]):
+        for left_index, right_index in zip(valid_indices, valid_indices[1:], strict=False):
             gap = right_index - left_index
             if gap <= 1:
                 continue

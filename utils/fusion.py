@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from utils.payloads import HandPayload
-
 
 BODY_TORSO_POINTS = (5, 6, 11, 12)
 BODY_JOINT_NAME_TO_INDEX = {

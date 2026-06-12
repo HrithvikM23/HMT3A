@@ -4,10 +4,10 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
-import config as app_config
-from backend_selection import BODY_BACKENDS, HAND_BACKENDS, LANDMARK_BACKENDS
-from mediapipe_models import mediapipe_pose_model_names
-from runtime_profiles import PROFILE_NAMES, PROFILE_QUALITY
+import core.config as app_config
+from core.backend_selection import BODY_BACKENDS, HAND_BACKENDS, LANDMARK_BACKENDS
+from core.mediapipe_models import mediapipe_pose_model_names
+from core.runtime_profiles import PROFILE_FASTEST, PROFILE_NAMES
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,9 +175,40 @@ def explicit_option_dests(parser: argparse.ArgumentParser, argv: list[str]) -> s
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Pose and Hand Landmark Pipeline")
     parser.add_argument(
+        "--config",
+        type=Path,
+        help="JSON config file whose keys match CLI destination names. Explicit CLI flags override config values.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate sources, outputs, runtime, and backend choices without opening video or running models.",
+    )
+    parser.add_argument(
+        "--runtime-check",
+        action="store_true",
+        help="Check Kinara runtime dependencies and print a backend report without requiring an input source.",
+    )
+    parser.add_argument(
+        "--skip-runtime-check",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--benchmark-frames",
+        type=int,
+        default=0,
+        help="Stop after N processed frames and print run timing. 0 processes the full source.",
+    )
+    parser.add_argument(
+        "--yolo-fast-preset",
+        choices=("nano", "small", "medium", "large", "xlarge"),
+        help="Convenience preset for legacy YOLO pose model size. Explicit --model still wins.",
+    )
+    parser.add_argument(
         "--profile",
         choices=PROFILE_NAMES,
-        default=PROFILE_QUALITY,
+        default=PROFILE_FASTEST,
         help="Runtime profile for app modes: fastest for realtime, mid for balanced, quality for offline renders.",
     )
     parser.add_argument(
@@ -213,28 +244,56 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--charuco-squares-y", type=int, default=5, help="Charuco board square count along Y.")
     parser.add_argument("--charuco-square-size", type=float, default=1.0, help="Real square size in your chosen units.")
     parser.add_argument("--charuco-marker-scale", type=float, default=0.8, help="Marker length as a fraction of square size.")
+    parser.add_argument("--charuco-marker-bits", type=int, default=4, choices=(4, 5, 6, 7), help="ArUco marker bit width used by the Charuco board.")
+    parser.add_argument("--charuco-dict-size", type=int, default=50, choices=(50, 100, 250, 1000), help="ArUco dictionary size used by the Charuco board.")
+    parser.add_argument(
+        "--charuco-legacy-pattern",
+        action="store_true",
+        help="Use OpenCV's legacy ChArUco marker layout. Enable this for many online-generated boards, including Calib.io-style patterns.",
+    )
+    parser.add_argument(
+        "--charuco-detection-strictness",
+        choices=("strict", "balanced", "lenient"),
+        default="balanced",
+        help="Charuco detection strictness. Strict uses normal OpenCV detection; balanced retries low-resolution frames at 2x; lenient uses stronger 3x retry for compressed or distant boards.",
+    )
+    parser.add_argument(
+        "--charuco-retry-scale",
+        type=float,
+        help="Override the ChArUco low-resolution retry scale. Use 1.5-4.0 for distant/compressed boards.",
+    )
+    parser.add_argument(
+        "--charuco-min-markers",
+        type=int,
+        help="Override the marker count required before skipping the enlarged ChArUco retry.",
+    )
+    parser.add_argument(
+        "--charuco-retry-sharpen",
+        action="store_true",
+        help="Sharpen the enlarged ChArUco retry frame before marker and corner interpolation.",
+    )
     parser.add_argument(
         "--model",
         help=(
-            "Body model selector. In YOLO mode use a YOLO pose filename/path. "
+            "Body model selector. In legacy YOLO mode use a YOLO pose filename/path. "
             f"In MediaPipe mode use one of: {', '.join(mediapipe_pose_model_names())}."
         ),
     )
     parser.add_argument(
         "--landmark-backend",
         choices=LANDMARK_BACKENDS,
-        default="yolo",
-        help="Select the high-level landmark backend family: yolo, mediapipe, or hybrid.",
+        default="mediapipe",
+        help="Select the landmark backend family: rtmpose, rtmpose-wholebody, mediapipe, hybrid, or yolo legacy.",
     )
     parser.add_argument(
         "--body-backend",
         choices=BODY_BACKENDS,
-        help="Body landmark backend. yolo supports multi-person; mediapipe adds richer single-person feet.",
+        help="Body backend. rtmpose-wholebody owns body+hands; rtmpose is body-only; yolo is legacy.",
     )
     parser.add_argument(
         "--hand-backend",
         choices=HAND_BACKENDS,
-        help="Hand landmark backend. onnx uses the local hand model; mediapipe uses MediaPipe hand landmarks.",
+        help="Hand backend. onnx uses the local hand model; rtmpose-wholebody uses WholeBody hands.",
     )
     parser.add_argument(
         "--backend-fallbacks",
@@ -260,8 +319,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--body-input-size",
         type=int,
-        default=960,
-        help="YOLO body model image size.",
+        default=640,
+        help="Legacy YOLO body model image size.",
     )
     parser.add_argument(
         "--hand-input-size",
@@ -309,7 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--body-iou-threshold",
         type=float,
         default=0.45,
-        help="YOLO body NMS IoU threshold.",
+        help="Legacy YOLO body NMS IoU threshold.",
     )
     parser.add_argument(
         "--max-people",
@@ -423,8 +482,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--yolo-tracker",
-        default="botsort.yaml",
-        help="Ultralytics tracker config name for multi-person tracking.",
+        default="bytetrack.yaml",
+        help="Legacy YOLO Ultralytics tracker config name for multi-person tracking.",
     )
     parser.add_argument(
         "--yolo-device",
@@ -434,6 +493,49 @@ def build_parser() -> argparse.ArgumentParser:
         "--yolo-half",
         action="store_true",
         help="Request FP16 body inference on supported CUDA GPUs.",
+    )
+    parser.add_argument(
+        "--no-yolo-fuse",
+        action="store_true",
+        help="Disable YOLO Conv+BatchNorm fusion at model startup.",
+    )
+    parser.add_argument(
+        "--no-yolo-warmup",
+        action="store_true",
+        help="Disable the one-time YOLO warmup inference pass.",
+    )
+    parser.add_argument(
+        "--no-yolo-person-class-filter",
+        action="store_true",
+        help="Disable YOLO class filtering. Pose models normally use class 0 for person.",
+    )
+    parser.add_argument(
+        "--rtmpose-mode",
+        choices=("lightweight", "balanced", "performance"),
+        default="balanced",
+        help="RTMPose model preset. lightweight is fastest; balanced is the default; performance is largest.",
+    )
+    parser.add_argument(
+        "--rtmpose-backend",
+        choices=("onnxruntime", "opencv"),
+        default="onnxruntime",
+        help="RTMPose inference backend. Use onnxruntime for RTX 50-series CUDA systems.",
+    )
+    parser.add_argument(
+        "--rtmpose-device",
+        default="cuda",
+        help="RTMPose device, usually cuda for RTX 50-series or cpu as fallback.",
+    )
+    parser.add_argument(
+        "--rtmpose-det-frequency",
+        type=int,
+        default=1,
+        help="Run RTMPose person detection every N frames when tracking is enabled.",
+    )
+    parser.add_argument(
+        "--no-rtmpose-tracking",
+        action="store_true",
+        help="Disable RTMPose tracker reuse between detection frames.",
     )
     parser.add_argument(
         "--body-detect-interval",

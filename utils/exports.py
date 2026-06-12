@@ -4,8 +4,8 @@ import json
 import math
 import re
 import statistics
-from pathlib import Path
 from collections.abc import Mapping
+from pathlib import Path
 from typing import cast
 
 from utils.body_geometry import derive_foot_points

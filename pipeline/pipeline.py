@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import cv2
 
-from config import BODY_EDGES, BODY_KEYPOINTS, HAND_EDGES, WRIST_TO_ELBOW
+from core.config import BODY_EDGES, BODY_KEYPOINTS, HAND_EDGES, WRIST_TO_ELBOW
 from utils.body_constraints import BodyKinematicConstraints
 from utils.body_geometry import derive_foot_points
 from utils.hand_constraints import enforce_hand_constraints
-from utils.hand_fallback import anchor_hand_to_wrist, generate_default_hand, has_usable_hand_detection, is_hand_detection_valid
+from utils.hand_fallback import (
+    anchor_hand_to_wrist,
+    generate_default_hand,
+    has_usable_hand_detection,
+    is_hand_detection_valid,
+)
+from utils.hand_tracking import blend_with_prediction, hand_detection_score, predict_hand_payload
 from utils.normalize import build_hand_box
 from utils.payloads import HandPayload
-from utils.prediction import predict_points, translate_box, translate_points
+from utils.prediction import predict_points
 from utils.skeleton import HAND_NAME_TO_INDEX
 
 
@@ -25,6 +31,7 @@ class PoseHandPipeline:
         self._last_body_points = None
         self._last_hand_by_side = {}
         self._last_wrist_by_side = {}
+        self._last_elbow_by_side = {}
         self._body_constraints = BodyKinematicConstraints(config)
         self.last_joint_depths: dict[str, float] = {}
         self._processing_size_logged = False
@@ -56,11 +63,10 @@ class PoseHandPipeline:
         self._previous_body_points = self._last_body_points
         self._last_body_points = body_points
         self.last_joint_depths = detected_depths
-        body_points_for_hands = self._scale_points(body_points, 1.0 / output_scale_x, 1.0 / output_scale_y)
         hands_by_side = self.detect_hands(
-            inference_frame,
-            body_points_for_hands,
-            output_scale=(output_scale_x, output_scale_y),
+            frame,
+            body_points,
+            output_scale=(1.0, 1.0),
         )
         self._frame_index += 1
         return body_points, hands_by_side
@@ -154,17 +160,21 @@ class PoseHandPipeline:
             raw_hand_depths = None
             raw_hand_in_inference_space = True
             hand_box = box
-            if run_hand_model:
-                detected_hand = self._detect_best_hand(frame, wrist_point, elbow_point, box)
+            predicted_hand = self._predict_hand(side, wrist_output, elbow_output)
+            if self.config.hand_backend == "rtmpose-wholebody":
+                wholebody_hand = self.runner.detect_wholebody_hand(side, body_points)
+                if wholebody_hand is not None:
+                    hand_box = wholebody_hand["box"]
+                    raw_hand_points = wholebody_hand["points"]
+            elif run_hand_model:
+                detected_hand = self._detect_best_hand(frame, side, wrist_point, elbow_point, box, output_scale)
                 if detected_hand is not None:
-                    raw_hand_points, raw_hand_depths = detected_hand
-                if raw_hand_points is None and self.config.enable_backend_fallbacks:
-                    predicted_hand = self._predict_hand(side, wrist_output)
+                    hand_box, raw_hand_points, raw_hand_depths = detected_hand
+                if raw_hand_points is None:
                     if predicted_hand is not None:
                         hand_box, raw_hand_points, raw_hand_depths = predicted_hand
                         raw_hand_in_inference_space = False
             else:
-                predicted_hand = self._predict_hand(side, wrist_output)
                 if predicted_hand is not None:
                     hand_box, raw_hand_points, raw_hand_depths = predicted_hand
                     raw_hand_in_inference_space = False
@@ -174,6 +184,9 @@ class PoseHandPipeline:
                 hand_box = self._scale_box(hand_box, output_scale_x, output_scale_y)
                 if raw_hand_depths is not None:
                     raw_hand_depths = [float(depth) * ((output_scale_x + output_scale_y) * 0.5) for depth in raw_hand_depths]
+
+            if raw_hand_points is not None and raw_hand_in_inference_space and predicted_hand is not None:
+                raw_hand_points = blend_with_prediction(raw_hand_points, predicted_hand[1], self.config)
 
             hand_points = self.smoother.smooth_hand(side, raw_hand_points)
             hand_depths = raw_hand_depths
@@ -196,6 +209,7 @@ class PoseHandPipeline:
             hands_by_side[side] = payload
             self._last_hand_by_side[side] = hands_by_side[side]
             self._last_wrist_by_side[side] = wrist_output
+            self._last_elbow_by_side[side] = elbow_output
 
         self._hand_frame_index += 1
         return hands_by_side
@@ -215,27 +229,17 @@ class PoseHandPipeline:
     def _should_run_hand_model(self) -> bool:
         return self._hand_frame_index % self.config.hand_detect_interval == 0
 
-    def _predict_hand(self, side, wrist_point):
-        previous_payload = self._last_hand_by_side.get(side)
-        previous_wrist = self._last_wrist_by_side.get(side)
-        if previous_payload is None or previous_wrist is None:
-            return None
-
-        offset_x = wrist_point[0] - previous_wrist[0]
-        offset_y = wrist_point[1] - previous_wrist[1]
-        depths = previous_payload.get("depths")
-        return (
-            translate_box(previous_payload["box"], offset_x, offset_y),
-            translate_points(
-                previous_payload["points"],
-                offset_x,
-                offset_y,
-                self.config.hold_confidence_decay,
-            ),
-            depths,
+    def _predict_hand(self, side, wrist_point, elbow_point=None):
+        return predict_hand_payload(
+            self._last_hand_by_side.get(side),
+            self._last_wrist_by_side.get(side),
+            wrist_point,
+            self.config.hold_confidence_decay,
+            self._last_elbow_by_side.get(side),
+            elbow_point,
         )
 
-    def _detect_best_hand(self, frame, wrist_point, elbow_point, primary_box):
+    def _detect_best_hand(self, frame, side, wrist_point, elbow_point, primary_box, output_scale=(1.0, 1.0)):
         frame_height, frame_width = frame.shape[:2]
         candidate_boxes = self._hand_candidate_boxes(
             wrist_point,
@@ -243,11 +247,15 @@ class PoseHandPipeline:
             frame_width,
             frame_height,
             primary_box,
+            output_scale,
+            side=side,
         )
 
         best_points = None
         best_depths = None
+        best_box = None
         best_score = -1.0
+        previous_points = self._last_hand_points_in_inference_space(side, output_scale)
         for box in candidate_boxes:
             raw_points = self.runner.detect_hand(frame, box)
             raw_depths = getattr(self.runner, "last_hand_depths", None)
@@ -256,25 +264,25 @@ class PoseHandPipeline:
 
             anchored_points = anchor_hand_to_wrist(raw_points, wrist_point)
             constrained_points = enforce_hand_constraints(anchored_points)
-            valid_points = sum(point[2] > self.config.hand_kp_threshold * 0.5 for point in constrained_points)
-            average_confidence = sum(point[2] for point in constrained_points) / len(constrained_points)
-            score = valid_points + average_confidence
-            if is_hand_detection_valid(constrained_points, wrist_point, elbow_point, self.config):
-                score += 10.0
+            score = hand_detection_score(constrained_points, wrist_point, elbow_point, self.config, previous_points)
             if score > best_score:
                 best_score = score
+                best_box = box
                 best_points = constrained_points
                 best_depths = raw_depths
 
         if best_points is None:
             return None
-        return best_points, best_depths
+        return best_box or primary_box, best_points, best_depths
 
-    def _hand_candidate_boxes(self, wrist_point, elbow_point, frame_width, frame_height, primary_box):
+    def _hand_candidate_boxes(self, wrist_point, elbow_point, frame_width, frame_height, primary_box, output_scale=(1.0, 1.0), side=None):
         if self.config.hand_backend == "mediapipe" and not self.config.enable_backend_fallbacks:
             return [primary_box]
 
         boxes = [primary_box]
+        previous_box = None if side is None else self._last_hand_box_in_inference_space(side, output_scale)
+        if previous_box is not None:
+            boxes.append(self._clamp_box(previous_box, frame_width, frame_height))
         retry_specs = ((2.4, 0.15), (2.8, 0.35), (3.2, 0.05))
         for scale_multiplier, forward_shift in retry_specs[: self.config.hand_crop_retries]:
             boxes.append(
@@ -297,6 +305,50 @@ class PoseHandPipeline:
             seen.add(box)
             unique_boxes.append(box)
         return unique_boxes
+
+    def _last_hand_points_in_inference_space(self, side, output_scale):
+        previous_payload = self._last_hand_by_side.get(side)
+        if previous_payload is None:
+            return None
+        scale_x, scale_y = output_scale
+        return self._scale_points(previous_payload["points"], 1.0 / scale_x, 1.0 / scale_y)
+
+    def _last_hand_box_in_inference_space(self, side, output_scale):
+        previous_payload = self._last_hand_by_side.get(side)
+        previous_wrist = self._last_wrist_by_side.get(side)
+        if previous_payload is None or previous_wrist is None:
+            return None
+
+        scale_x, scale_y = output_scale
+        wrist_point = (
+            int(round(previous_wrist[0] / scale_x)),
+            int(round(previous_wrist[1] / scale_y)),
+            previous_wrist[2],
+        )
+        predicted = self._predict_hand(side, previous_wrist, self._last_elbow_by_side.get(side))
+        box = previous_payload["box"] if predicted is None else predicted[0]
+        inference_box = self._scale_box(box, 1.0 / scale_x, 1.0 / scale_y)
+        x1, y1, x2, y2 = inference_box
+        center_x = (x1 + x2) * 0.5
+        center_y = (y1 + y2) * 0.5
+        delta_x = wrist_point[0] - ((x1 + x2) * 0.5)
+        delta_y = wrist_point[1] - ((y1 + y2) * 0.5)
+        return (
+            int(round(center_x + delta_x - (x2 - x1) * 0.5)),
+            int(round(center_y + delta_y - (y2 - y1) * 0.5)),
+            int(round(center_x + delta_x + (x2 - x1) * 0.5)),
+            int(round(center_y + delta_y + (y2 - y1) * 0.5)),
+        )
+
+    @staticmethod
+    def _clamp_box(box, frame_width, frame_height):
+        x1, y1, x2, y2 = box
+        return (
+            max(0, min(frame_width, x1)),
+            max(0, min(frame_height, y1)),
+            max(0, min(frame_width, x2)),
+            max(0, min(frame_height, y2)),
+        )
 
     def render_pose(self, frame, body_points, hands_by_side, send_osc: bool = True) -> None:
         if body_points is None:

@@ -4,20 +4,23 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from utils.logging import safe_print
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 VENDOR_DIR = PROJECT_ROOT / f".vendor_py{sys.version_info.major}{sys.version_info.minor}"
 ULTRALYTICS_CONFIG_DIR = PROJECT_ROOT / ".ultralytics"
 
 REQUIRED_PROJECT_FILES = (
-    Path("main.py"),
+    Path("app") / "main.py",
+    Path("app") / "kinara_launcher.py",
     Path("pyproject.toml"),
-    Path("backend_selection.py"),
-    Path("cli.py"),
-    Path("config.py"),
-    Path("runtime_profiles.py"),
+    Path("core") / "backend_selection.py",
+    Path("core") / "cli.py",
+    Path("core") / "config.py",
+    Path("core") / "mediapipe_models.py",
+    Path("core") / "runtime_profiles.py",
     Path("kinara") / "__main__.py",
-    Path("runtime_config.py"),
+    Path("core") / "runtime_config.py",
     Path("camera") / "capture.py",
     Path("inference") / "rtmpose.py",
     Path("network") / "osc_sender.py",
@@ -40,11 +43,13 @@ REQUIRED_PROJECT_FILES = (
     Path("utils") / "fusion.py",
     Path("utils") / "hand_constraints.py",
     Path("utils") / "hand_fallback.py",
+    Path("utils") / "hand_tracking.py",
     Path("utils") / "model_assets.py",
     Path("utils") / "motion_cleanup.py",
     Path("utils") / "multi_person.py",
     Path("utils") / "normalize.py",
     Path("utils") / "payloads.py",
+    Path("utils") / "preview_stream.py",
     Path("utils") / "skeleton.py",
     Path("utils") / "smoothing.py",
     Path("utils") / "triangulation.py",
@@ -58,6 +63,8 @@ MODULE_TO_PACKAGE = {
     "ultralytics": "ultralytics",
     "onnxruntime": "onnxruntime",
     "mediapipe": "mediapipe==0.10.21",
+    "rtmlib": "rtmlib",
+    "aniposelib": "aniposelib>=0.7,<0.8",
 }
 
 
@@ -92,8 +99,7 @@ class TerminalProgress:
         bar = "#" * filled + "-" * (self.width - filled)
         line = f"\r[{bar}] {self.current_step}/{self.total_steps} {int(ratio * 100):3d}% {message}"
         padding = max(0, self._last_render_length - len(line))
-        sys.stdout.write(line + (" " * padding))
-        sys.stdout.flush()
+        safe_print(line + (" " * padding), end="")
         self._last_render_length = len(line)
 
     def note(self, message: str) -> None:
@@ -104,8 +110,7 @@ class TerminalProgress:
         self._render(message)
 
     def break_line(self) -> None:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        safe_print()
         self._last_render_length = 0
 
     def finish(self, message: str) -> None:

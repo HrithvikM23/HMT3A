@@ -16,7 +16,7 @@ from utils.bootstrap_paths import (
     register_windows_dll_directory,
     safe_iter_dirs,
 )
-from utils.bootstrap_state import RuntimeReport, VENDOR_DIR
+from utils.bootstrap_state import VENDOR_DIR, RuntimeReport
 
 
 def find_nvidia_smi() -> Path | None:
