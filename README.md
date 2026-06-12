@@ -4,7 +4,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Status](https://img.shields.io/badge/status-active-brightgreen)
 
-Kinara is a local video and webcam motion-tracking pipeline built around a YOLO-based body pose tracking and ONNX hand pose inference. It supports single-person tracking, single-camera multi-person tracking, optional multi-camera fusion, live UDP output for Unreal-side receivers, and stack-safe output generation.
+Kinara is a local video and webcam motion-tracking pipeline with MediaPipe defaults, RTMPose CUDA body tracking, legacy YOLO body pose tracking, and ONNX hand pose inference. It supports single-person tracking, single-camera multi-person tracking, optional multi-camera fusion, live UDP output for Unreal-side receivers, and stack-safe output generation.
 
 Project documentation:
 
@@ -13,7 +13,8 @@ Project documentation:
 - [Function Reference](./docs/function-reference.md)
 
 This branch is currently optimized for practical local runtime use:
-- YOLO body tracking for both single-person and multi-person flows
+- RTMPose body tracking for CUDA-first single-person and multi-person flows
+- legacy YOLO body tracking for compatibility and comparisons
 - ONNX hand tracking with fallback hands and anatomical cleanup
 - clothing-hint assisted multi-person identity stability
 - rendered video, JSON, and FBX outputs
@@ -25,7 +26,6 @@ This branch is currently optimized for practical local runtime use:
 ## Hardware
 
 - Webcam or video file input
-- 16 GB RAM recommended
 - NVIDIA GPU strongly recommended for YOLO pose inference
 - Multi-camera setup optional
 
@@ -113,9 +113,21 @@ Rendered Output / JSON / FBX / Live UDP
 
 ## Body Tracking
 
-Body tracking uses an Ultralytics YOLO pose model by default. If you select the MediaPipe backend, the body model is a MediaPipe pose landmark TFLite asset.
+For RTX 50-series / `sm_120` systems, use RTMPose through ONNX Runtime:
 
-Default body model:
+```txt
+--landmark-backend rtmpose --rtmpose-device cuda --rtmpose-mode balanced
+```
+
+If you want RTMPose to own both body and hand landmarks, use WholeBody mode:
+
+```txt
+--landmark-backend rtmpose-wholebody --rtmpose-device cuda --rtmpose-mode balanced
+```
+
+Body tracking uses MediaPipe pose landmarks by default. If you select the RTMPose backend, Kinara uses `rtmlib` RTMPose body tracking plus the configured hand backend. If you select RTMPose WholeBody, Kinara uses `rtmlib` WholeBody for body and both 21-point hands. If you select the YOLO backend, Kinara uses the legacy Ultralytics YOLO pose model path.
+
+Default legacy YOLO body model when YOLO mode is selected:
 
 ```txt
 yolo11x-pose.pt
@@ -233,10 +245,12 @@ It uses:
 - wrist ownership checks to reduce hand stealing during crossings
 ```
 
+For speed-first runs, MediaPipe can enter the same multi-person runner/export path, but MediaPipe Pose only returns one body per frame. Use YOLO when you need true multiple-person detection in one camera view.
+
 Example identity hints:
 
 ```bash
-py main.py --source ".\two_people.mp4" --max-people 2 --identity person1=black,orange --identity person2=gray,silver
+py app\main.py --source ".\two_people.mp4" --max-people 2 --identity person1=black,orange --identity person2=gray,silver
 ```
 
 Multi-camera plus multi-person can now run together through the fused multi-person path.
@@ -256,7 +270,53 @@ Multi-camera mode is based on generic camera labels:
 
 Repeated unlabeled `--source` values are assigned `CAM_0`, `CAM_1`, and so on. You may still provide explicit labels, but the recommended path is to keep camera names generic and let calibration/sync data describe where each camera is in the rig.
 
-The current fusion path supports lightweight per-camera depth overrides from JSON and calibrated 3D reconstruction from a TOML file whose camera names match the source labels. Without calibration data, generic cameras use neutral depth settings.
+The current fusion path supports lightweight per-camera depth overrides from JSON and calibrated 3D reconstruction from a TOML file whose camera names match the source labels. Without calibration data, generic cameras use neutral depth settings; real non-flat 3D should come from calibrated reconstruction.
+
+---
+
+# Windows App Build
+
+Kinara includes a native Windows launcher that can be built into an app folder with an `.exe`.
+
+From the repo root:
+
+```powershell
+.\scripts\build_exe.ps1
+```
+
+The build writes the app here:
+
+```txt
+artifacts\windows\Kinara\Kinara.exe
+```
+
+Run it by double-clicking `Kinara.exe`. Keep the full `artifacts\windows\Kinara\` folder together when moving it to another machine, because the EXE depends on the `_internal` files beside it.
+
+Do not commit the built app folder to git. The build output is ignored by `.gitignore`; share it separately through a GitHub Release or a zipped build artifact.
+
+Double-clicking `Kinara.exe` opens a native Windows desktop launcher instead of requiring terminal input. The UI uses a resizable control-deck layout: the preview/log area and the right control panel can be resized with splitter handles, with minimum and maximum constraints so the app cannot be crushed into an unusable shape.
+
+Launcher tabs:
+
+- Capture: local camera input for quick tests.
+- Files: recorded source selection and output destination.
+- Presets: one-click setups for demo, quality export, multi-person, RTMPose, and ChArUco calibration situations.
+- Calibration: camera calibration workflow for synchronized ChArUco videos, including output path selection and A3/Rescue board presets.
+- Triangulation: calibrated 3D triangulation workflow with a browse button for `.toml` or `.json` calibration files.
+- Tune: advanced CLI-backed controls, including Runtime people count, identity color hints, Python runtime selection, model/backend options, ChArUco detector tuning, triangulation tuning, smoothing, cleanup, and output settings.
+
+Global launcher controls:
+
+- Sun/moon theme button: dark mode starts with a sun icon; clicking it switches to light mode and changes the icon to a moon.
+- Reset button: restores launcher defaults without clearing selected source files.
+- Check Runtime: installs/checks selected runtime dependencies and prepares selected model assets.
+- Start: runs the selected workflow directly and skips runtime bootstrap so demo starts are faster after Check Runtime has been used.
+
+The launcher runs the existing Kinara pipeline underneath, so CLI behavior and GUI behavior stay aligned.
+
+During a launcher run, the processed frame is streamed back into the large preview area inside the app. The OpenCV preview window stays disabled for the packaged launcher, so the rendered skeleton view appears in the EXE UI instead of opening a separate terminal/OpenCV window.
+
+MediaPipe is not bundled into the launcher build. The default session uses MediaPipe, so Check Runtime installs it through the normal pip flow (`python -m pip install mediapipe==0.10.21`) with the configured Python runtime into the app-local `.vendor_py311` folder. Sessions that explicitly choose YOLO body plus ONNX hands do not install MediaPipe.
 
 ---
 
@@ -327,7 +387,7 @@ The next run becomes `-2`, then `-3`, and so on.
 
 ```bash
 cd [drive]:\[path]\Kinara
-py main.py
+py app\main.py
 ```
 
 You can also use the package entrypoint:
@@ -352,103 +412,115 @@ Press `ESC` to close preview windows.
 Single-person:
 
 ```bash
-py main.py --source ".\video.mp4" --model yolo11x-pose.pt
+py app\main.py --source ".\video.mp4" --model yolo11x-pose.pt
 ```
 
 Realtime preview mode:
 
 ```bash
-py main.py --source ".\video.mp4" --profile fastest --fps-log-interval 1
+py app\main.py --source ".\video.mp4" --profile fastest --fps-log-interval 1
 ```
 
 Fast preview on high-resolution clips:
 
 ```bash
-py main.py --source ".\video.mp4" --profile fastest --processing-width 640
+py app\main.py --source ".\video.mp4" --profile fastest --processing-width 640
 ```
 
-The output video stays at the original video size; only the model's working frame is reduced. The run prints a one-time line such as `source 1920x1080 -> inference 640x360` so you can confirm the scale.
+The output video stays at the original video size. Body/person detection can use the reduced working frame, but hand crops are taken from the original source frame so small fingers do not get blurred by downscale-then-upscale processing. The run prints a one-time line such as `source 1920x1080 -> inference 640x360` so you can confirm the body/person inference scale.
 
 Saved videos include an FPS tracker overlay by default. Add `--no-fps-overlay` to hide it.
 
 Balanced mode:
 
 ```bash
-py main.py --source ".\video.mp4" --profile mid
+py app\main.py --source ".\video.mp4" --profile mid
 ```
 
 MediaPipe body and hand mode:
 
 ```bash
-py main.py --source ".\video.mp4" --landmark-backend mediapipe --model pose_landmark_full.tflite
+py app\main.py --source ".\video.mp4" --landmark-backend mediapipe --model pose_landmark_full.tflite
 ```
 
 Single-camera exports are flat in depth by default because one camera cannot reconstruct reliable metric 3D. To experiment with MediaPipe world-landmark relative Z, add:
 
 ```bash
-py main.py --source ".\video.mp4" --landmark-backend mediapipe --single-camera-depth mediapipe
+py app\main.py --source ".\video.mp4" --landmark-backend mediapipe --single-camera-depth mediapipe
 ```
 
 YOLO body with MediaPipe hands:
 
 ```bash
-py main.py --source ".\video.mp4" --body-backend yolo --hand-backend mediapipe
+py app\main.py --source ".\video.mp4" --body-backend yolo --hand-backend mediapipe
 ```
 
 Offline quality mode:
 
 ```bash
-py main.py --source ".\video.mp4" --profile quality
+py app\main.py --source ".\video.mp4" --profile quality
 ```
 
 Single-person with CPU hand fallback:
 
 ```bash
-py main.py --source ".\video.mp4" --model yolo11x-pose.pt --provider CPUExecutionProvider
+py app\main.py --source ".\video.mp4" --model yolo11x-pose.pt --provider CPUExecutionProvider
 ```
 
 Faster preview/render pass with prediction between model frames:
 
 ```bash
-py main.py --source ".\video.mp4" --profile fastest --yolo-device cuda:0 --fps-log-interval 1
+py app\main.py --source ".\video.mp4" --profile fastest --yolo-device cuda:0 --fps-log-interval 1
 ```
 
 Two-person tracking:
 
 ```bash
-py main.py --source ".\two_people.mp4" --model yolo11x-pose.pt --max-people 2
+py app\main.py --source ".\two_people.mp4" --model yolo11x-pose.pt --max-people 2
 ```
 
 Two-person tracking with identity hints:
 
 ```bash
-py main.py --source ".\two_people.mp4" --model yolo11x-pose.pt --max-people 2 --identity person1=black,orange --identity person2=gray,silver
+py app\main.py --source ".\two_people.mp4" --model yolo11x-pose.pt --max-people 2 --identity person1=black,orange --identity person2=gray,silver
 ```
 
 Multi-camera fused tracking from the CLI:
 
 ```bash
-py main.py --source ".\cam0.mp4" --source ".\cam1.mp4" --max-people 2
+py app\main.py --source ".\cam0.mp4" --source ".\cam1.mp4" --max-people 2
 ```
 
-Create a calibrated camera TOML from Charuco calibration videos:
+Create a calibrated camera TOML from ChArUco calibration videos:
 
 ```bash
-py main.py --calibrate-cameras --source ".\calib_cam0.mp4" --source ".\calib_cam1.mp4" --calibration-output ".\calibration.toml" --charuco-square-size 35
+py app\main.py --calibrate-cameras --source ".\calib_cam0.mp4" --source ".\calib_cam1.mp4" --calibration-output ".\calibration.toml" --charuco-squares-x 11 --charuco-squares-y 8 --charuco-square-size 36 --charuco-marker-scale 0.6667 --charuco-marker-bits 4 --charuco-dict-size 50 --charuco-detection-strictness balanced
+```
+
+For weak board videos, the detector retry can be tuned directly:
+
+```bash
+py app\main.py --calibrate-cameras --source ".\calib_cam0.mp4" --source ".\calib_cam1.mp4" --calibration-output ".\calibration.toml" --charuco-detection-strictness lenient --charuco-retry-scale 3.5 --charuco-min-markers 6 --charuco-retry-sharpen
 ```
 
 ### Calibration Board
 
-Use a Charuco board for camera calibration. The recommended starter board is:
+Use a real OpenCV ChArUco board for camera calibration. The current recommended A3 landscape board is:
 
 ```txt
-Squares: 7 x 5
-Square size: 35 mm
-Marker size: 28 mm
-Marker scale: 0.8
+Squares: 11 x 8
+Square size: 36 mm
+Marker size: 24 mm
+Marker scale: 0.6667
+Dictionary: DICT_4X4_50
+Legacy pattern: off for boards generated by current OpenCV
 ```
 
-Print it as large and flat as practical. A4 can work for close webcams, but A3 is better because the board remains readable from more positions in the capture space. The most important value is the true measured edge length of one square. If the printed square edge is 30 mm, pass `--charuco-square-size 30`; if it is 35 mm, pass `--charuco-square-size 35`.
+Generate the board with OpenCV `cv2.aruco.CharucoBoard.generateImage()` and print on A3 landscape at actual size / 100% scale. If the printed square edge measures differently, pass the measured value to `--charuco-square-size`. Do not use a random ArUco grid; Kinara needs a ChArUco board whose marker IDs match OpenCV's board layout.
+
+Some online generators create OpenCV's older ChArUco marker layout. If OpenCV detects the ArUco markers but reports zero ChArUco corners, enable `--charuco-legacy-pattern`. The launcher exposes this through Tune > Calibration, while the Calibration tab provides the normal A3 and Rescue presets.
+
+For compressed, distant, or lower-resolution board videos, set `--charuco-detection-strictness lenient`. Use `balanced` for normal recorded calibration clips and `strict` only for clean, sharp footage. If needed, override the retry with `--charuco-retry-scale`, `--charuco-min-markers`, and `--charuco-retry-sharpen`.
 
 Good calibration video habits:
 
@@ -461,7 +533,7 @@ Good calibration video habits:
 Fused tracking with real calibrated 3D triangulation:
 
 ```bash
-py main.py --source ".\cam0.mp4" --source ".\cam1.mp4" --triangulate-3d --calibration-3d ".\calibration.toml" --sync-offset CAM_1=3
+py app\main.py --source ".\cam0.mp4" --source ".\cam1.mp4" --triangulate-3d --calibration-3d ".\calibration.toml" --sync-offset CAM_1=3
 ```
 
 All CLI arguments are documented in [cli-args.md](./docs/cli-args.md).
@@ -489,37 +561,39 @@ All CLI arguments are documented in [cli-args.md](./docs/cli-args.md).
 | JSON export generation              | Complete |
 | FBX export generation               | Complete |
 | Live UDP streaming                  | Complete |
-| Live root motion in Unreal/Blender  | Planned  |
-| Live-only low-RAM mode with optional exports | Planned  |
-| Android multi-phone LAN/WLAN streaming ingest | Planned  |
-| Marker-glove hand tracking with joint dots | Planned  |
-| Standalone desktop app build with .exe launcher | Planned  |
-| Auto identity re-lock after person crossings | Planned  |
-| Connection health monitor for ping, packet loss, latency, and FPS | Planned  |
-| Hand inference decimation with interpolation between frames | Planned  |
-| Occlusion recovery for missing joints across camera views | Planned  |
-| Head and face tracking for head aim and facial landmarks | Planned  |
-| Retarget presets for Unreal, MetaHuman, Mixamo, and Rigify | Planned  |
-| Foot contact and ground lock to reduce foot sliding | Planned  |
-| Multi-person FBX export             | Working |
-| Calibration-aware 3D fusion         | Working  |
+| Live root motion in Unreal/Blender  | Complete |
+| Android multi-phone LAN/WLAN streaming ingest | MASKON |
+| Marker-glove hand tracking with joint dots | MASKON |
+| Standalone desktop app build with .exe launcher | Complete |
+| Native launcher control-deck UI     | Complete |
+| Launcher presets and reset defaults | Complete |
+| Launcher calibration workflow tab   | Complete |
+| Launcher triangulation workflow tab | Complete |
+| Auto identity re-lock after person crossings | Complete |
+| Connection health monitor for ping, packet loss, latency, and FPS | MASKON |
+| Hand inference decimation with interpolation between frames | Complete |
+| Occlusion recovery for missing joints across camera views | Complete |
+| Head and face tracking for head aim and facial landmarks | Head joints complete; face landmark export requires a face backend |
+| Foot contact and ground lock to reduce foot sliding | Complete |
+| Multi-person FBX export             | Complete |
+| Calibration-aware 3D fusion         | Complete |
 | Multi-camera + multi-person         | Complete |
 
 ---
 
-# Roadmap
+# MASKON-Owned Integration Notes
 
 ## 3D Fusion
 
-Improve the current view-aware depth estimation into stronger calibration-driven reconstruction once measured camera rigs are available.
+Continue improving reconstruction quality, sync tooling, and diagnostics around the calibrated triangulation path. The core calibration-aware 3D fusion path is implemented through `--triangulate-3d --calibration-3d`.
 
 ## Runtime Streaming
 
-Keep the current UDP live-motion path and add an Unreal-side receiver/parser workflow around the v2 packet schema.
+Keep the current UDP live-motion path and add an Unreal-side receiver/parser workflow around the v2 packet schema. The launcher no longer exposes the old UDP camera placeholder; downstream receiver integration can be built separately without blocking the local capture UI.
 
 ## Android Multi-Phone Capture
 
-Add an Android client flow where up to four phones can stream camera video over LAN/WLAN to a PC receiver. The planned backend path includes port-based client listening, generic camera IDs such as `CAM_0` and `CAM_1`, a connection handshake/health-check before capture begins, bounded buffering between ingest and inference, calibration/sync status tracking, and confidence-based multi-camera fusion for final output generation.
+Android multi-phone capture is handled by MASKON. That side can hand Kinara normal camera or video sources using generic labels such as `CAM_0` and `CAM_1`.
 
 ---
 
@@ -549,3 +623,4 @@ Add an Android client flow where up to four phones can stream camera video over 
 # License
 
 See [LICENSE](./LICENSE.md).
+

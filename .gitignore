@@ -2,6 +2,14 @@
 # Python cache / builds
 # ----------------------
 __pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+*.spec
+artifacts/*
 *.py[cod]
 *.pyo
 *.pyd
@@ -21,13 +29,29 @@ venv/
 # ----------------------
 logs/
 outputs/
+.kinara_runtime/
+.kinara_runtime*/
+.kinara_logs/
+.kinara_logs*/
+artifacts/**/.kinara_logs/
+artifacts/**/.kinara_runtime/
+artifacts/**/.vendor_py*/
+artifacts/**/.ultralytics/
 .tmp_test_runtime/
 .tmp_smoke/
 tmp_test/
+tmp/
 *.log
+*.txt.log
 *.mp4
 *.avi
 *.jpg
+*.jpeg
+*.toml.quality.json
+camera_calibration.toml
+calibration.toml
+charuco_*.png
+opencv_current_charuco_*.png
 
 # ----------------------
 # Model weights (VERY IMPORTANT)

@@ -1,1 +1,154 @@
-a
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kinara-motion"
+version = "0.1.0"
+description = "Local video and webcam human motion tracking pipeline for Unreal runtime output."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = { file = "LICENSE.md" }
+authors = [
+    { name = "HrithvikM" },
+]
+keywords = [
+    "motion-capture",
+    "pose-estimation",
+    "mediapipe",
+    "onnx",
+    "unreal-engine",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+dependencies = [
+    "numpy>=1.26,<2.0",
+    "opencv-python>=4.9,<5.0",
+    "protobuf>=4.25.3,<5",
+]
+
+[project.optional-dependencies]
+mediapipe = [
+    "mediapipe==0.10.21",
+]
+yolo = [
+    "ultralytics>=8.3",
+    "torch>=2.3",
+    "torchvision>=0.18",
+]
+onnx = [
+    "onnxruntime>=1.18",
+]
+rtmpose = [
+    "opencv-contrib-python>=4.9,<4.12",
+    "rtmlib>=0.0.15",
+]
+rtmpose-gpu = [
+    "onnxruntime-gpu>=1.22",
+    "opencv-contrib-python>=4.9,<4.12",
+    "rtmlib>=0.0.15",
+]
+onnx-gpu = [
+    "onnxruntime-gpu>=1.18",
+]
+gui = [
+    "PySide6>=6.7,<7.0",
+]
+build = [
+    "pyinstaller>=6.0",
+]
+calibration = [
+    "aniposelib>=0.7,<0.8",
+    "numpy>=1.26,<2.0",
+    "opencv-contrib-python>=4.9,<4.12",
+]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.5",
+]
+runtime = [
+    "mediapipe==0.10.21",
+    "onnxruntime>=1.18",
+    "rtmlib>=0.0.15",
+    "torch>=2.3",
+    "torchvision>=0.18",
+    "ultralytics>=8.3",
+]
+all = [
+    "PySide6>=6.7,<7.0",
+    "mediapipe==0.10.21",
+    "onnxruntime>=1.18",
+    "pyinstaller>=6.0",
+    "pytest>=8.2",
+    "rtmlib>=0.0.15",
+    "ruff>=0.5",
+    "torch>=2.3",
+    "torchvision>=0.18",
+    "ultralytics>=8.3",
+]
+
+[project.scripts]
+kinara = "app.main:main"
+kinara-launcher = "app.kinara_launcher:main"
+
+[project.urls]
+Homepage = "https://github.com/HrithvikM23/Kinara"
+Repository = "https://github.com/HrithvikM23/Kinara"
+Documentation = "https://github.com/HrithvikM23/Kinara/tree/main/docs"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "app*",
+    "camera*",
+    "core*",
+    "inference*",
+    "kinara*",
+    "network*",
+    "pipeline*",
+    "runners*",
+    "utils*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = [
+    "-ra",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [
+    ".tmp_test_runtime",
+    ".vendor_py*",
+    "artifacts",
+    "models",
+    "outputs",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+]
+ignore = [
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"app/main.py" = ["E402"]
+"app/kinara_launcher.py" = ["E402"]
