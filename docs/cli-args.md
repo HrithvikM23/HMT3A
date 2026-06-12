@@ -9,9 +9,14 @@ Default: `fastest`
 Notes: `fastest` uses the light body model, FP16 body inference on CUDA when available, a 640px processing frame, and reduced hand cadence. `mid` balances speed and stability. `quality` keeps the heaviest defaults for offline renders. Any explicit argument you pass with a profile overrides that profile value.
 
 `--calibrate-cameras`  
-Function: Creates a calibrated camera TOML from synchronized Charuco calibration videos.  
+Function: Creates a calibrated camera TOML from synchronized ChArUco calibration videos.  
 Accepted values: flag only.  
 Notes: Use with at least two `--source` video files and `--calibration-output`.
+
+`--runtime-check`  
+Function: Checks/installs the selected runtime dependencies, prepares selected model assets, prints a backend report, then exits without requiring an input source.  
+Accepted values: flag only.  
+Notes: In the launcher, use Check Runtime before Start when dependencies or model assets may be missing. Launcher Start passes an internal skip flag so it does not repeat this work.
 
 `--source`  
 Function: Selects the input source.  
@@ -36,12 +41,12 @@ Function: Sets the output TOML path for `--calibrate-cameras`.
 Accepted values: writable `.toml` path or output directory.
 
 `--charuco-squares-x`  
-Function: Sets the Charuco board square count along X for calibration.  
+Function: Sets the ChArUco board square count along X for calibration.  
 Accepted range: integer `> 0`.  
 Default: `7`
 
 `--charuco-squares-y`  
-Function: Sets the Charuco board square count along Y for calibration.  
+Function: Sets the ChArUco board square count along Y for calibration.  
 Accepted range: integer `> 0`.  
 Default: `5`
 
@@ -76,6 +81,24 @@ Function: Controls how aggressively calibration retries weak board detections.
 Accepted values: `strict`, `balanced`, `lenient`.  
 Default: `balanced`  
 Notes: `strict` uses normal OpenCV detection. `balanced` retries low-resolution frames at 2x. `lenient` uses a stronger 3x retry for compressed, distant, or low-resolution board videos.
+
+`--charuco-retry-scale`  
+Function: Overrides the ChArUco enlarged-frame retry scale.  
+Accepted range: float `> 1.0` and `<= 5.0`.  
+Default: preset-derived from `--charuco-detection-strictness` unless omitted.  
+Notes: Values around `2.0` are normal; `3.0` to `3.5` can rescue distant/compressed board footage at the cost of speed.
+
+`--charuco-min-markers`  
+Function: Overrides the marker count required before skipping the enlarged ChArUco retry.  
+Accepted range: integer `>= 1`.  
+Default: preset-derived from `--charuco-detection-strictness` unless omitted.  
+Notes: Lower values retry more frames. Use this when ArUco markers appear but ChArUco corners are unstable.
+
+`--charuco-retry-sharpen`  
+Function: Sharpens the enlarged retry frame before marker detection and ChArUco corner interpolation.  
+Accepted values: flag only.  
+Default: disabled unless the selected strictness preset already enables sharpening.  
+Notes: Useful for compressed, distant, or slightly soft calibration clips.
 
 Recommended A3 landscape board: 11 x 8 ChArUco squares, 36 mm square size, 24 mm marker size, marker scale `0.6667`, dictionary `DICT_4X4_50`, latest OpenCV pattern. If your printed square edge measures differently, use the measured value for `--charuco-square-size`. If the board was generated with a legacy online generator, add `--charuco-legacy-pattern`.
 

@@ -6,14 +6,14 @@ This file explains the project as if you were tracing it during execution. The a
 
 ## 1. Process Startup
 
-When Python starts `app/main.py`, the first meaningful thing that happens is:
+When Python starts `app/main.py`, the first meaningful runtime step is normally:
 
 ```python
 from utils.bootstrap_dependencies import ensure_runtime_ready
 ensure_runtime_ready()
 ```
 
-That means the application does not wait until later to discover runtime problems. It tries to repair the environment before doing anything else.
+That means the CLI path does not wait until later to discover runtime problems. It tries to repair the environment before doing anything else. In the native launcher, the Check Runtime button runs this preparation step explicitly, while the Start button passes an internal skip flag so a demo run can start quickly after dependencies and model assets have already been prepared.
 
 ### Why that matters
 
@@ -51,7 +51,7 @@ This startup layer makes the repo much more portable because the project can car
 
 ## 3. CLI Resolution
 
-After bootstrap, `main()` builds the CLI parser and parses args.
+After bootstrap, or immediately when the internal launcher skip flag is present, `main()` builds the CLI parser and parses args.
 
 Then `resolve_sources()` transforms the raw input into a list of `InputAssignment` objects.
 

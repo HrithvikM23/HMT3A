@@ -10,7 +10,7 @@ This reference is organized by module. Each bullet explains:
 
 Private helpers are included because much of Kinara's logic is intentionally lightweight and function-driven rather than hidden behind large framework abstractions.
 
-For end-to-end execution order and module interaction, pair this file with [Architecture And Data Flow](./ARCHITECTURE_AND_DATA_FLOW.md) and [Detailed Runtime Walkthrough](./DETAILED_RUNTIME_WALKTHROUGH.md).
+For end-to-end execution order and module interaction, pair this file with [Architecture And Data Flow](./architecture.md) and [Detailed Runtime Walkthrough](./runtime-walkthrough.md).
 
 ## `app/main.py`
 
@@ -165,6 +165,14 @@ The implementation is split across:
 ## `utils/normalize.py`
 
 - `build_hand_box`: Builds a wrist-centered square crop using the wrist-to-elbow direction, a configurable scale, a minimum size, and a forward shift.
+
+## `utils/calibration.py`
+
+- `calibration_available`: Checks whether OpenCV ArUco support and aniposelib calibration classes are importable.
+- `calibrate_cameras`: Runs synchronized ChArUco video calibration and writes a camera TOML plus a `.quality.json` report.
+- `_validate_detected_rows`: Rejects empty or cornerless ChArUco detections before calibration proceeds.
+- `_enable_low_resolution_charuco_detection`: Wraps aniposelib's ChArUco detector with optional enlarged-frame retry, marker-count override, and sharpening.
+- `_configure_charuco_legacy_pattern`: Enables OpenCV's legacy ChArUco marker layout when supported.
 
 ## `utils/triangulation.py`
 

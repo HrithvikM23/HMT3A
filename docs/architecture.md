@@ -17,8 +17,8 @@ This document explains that movement in detail.
 If you are brand new to the repo:
 
 1. Read this file first for the big picture.
-2. Read [Detailed Runtime Walkthrough](./DETAILED_RUNTIME_WALKTHROUGH.md) next for a story-like execution trace.
-3. Read [Function Reference](./FUNCTION_REFERENCE.md) when you need symbol-level detail.
+2. Read [Detailed Runtime Walkthrough](./runtime-walkthrough.md) next for a story-like execution trace.
+3. Read [Function Reference](./function-reference.md) when you need symbol-level detail.
 4. Open `app/main.py`, then follow the call chains into `core/cli.py`, `core/runtime_config.py`, and `runners/`.
 
 ## System Goal
@@ -36,6 +36,7 @@ At a high level, Kinara does five jobs:
 | Module | Main responsibility | Consumes | Produces |
 | --- | --- | --- | --- |
 | `app/main.py` | Bootstrap and mode selection | CLI args, input sources | delegated runtime session |
+| `app/kinara_launcher.py` | Native Windows launcher | user selections, presets, workflow tabs | runner command, live preview bridge |
 | `core/cli.py` | CLI parsing and source selection | argv, interactive prompts | input assignments |
 | `runtime_profiles.py` | Fastest/mid/quality tuning presets | parsed CLI namespace | profile-applied runtime knobs |
 | `core/runtime_config.py` | Model prep and config validation | CLI namespace, source assignment | `PipelineConfig` |
@@ -55,6 +56,8 @@ At a high level, Kinara does five jobs:
 | `utils/hand_constraints.py` | Anatomical cleanup | hand landmarks | cleaned hand landmarks |
 | `utils/multi_person.py` | Single-camera multi-person tracking | detector results, frame | persistent person tracks |
 | `utils/fusion.py` | Multi-camera projection and fusion | per-view people/landmarks | fused body/hands/depth |
+| `utils/calibration.py` | ChArUco camera calibration | synchronized calibration videos | camera TOML, quality JSON |
+| `utils/triangulation.py` | Calibrated 3D reconstruction | 2D observations, camera calibration | 3D joint overrides and arrays |
 | `utils/exports.py` | Joint building and export formats | body points, hands, fused depth | motion JSON, FBX data |
 | `blender_kinematics/kinara_motion.py` | Blender-side JSON parsing/rest pose prep | Kinara JSON | `MotionClip` |
 | `blender_kinematics/import_kinara_motion.py` | Blender armature import and bake | `MotionClip` | armatures, actions, baked animation |
@@ -88,7 +91,7 @@ flowchart TD
 
 ### 1. Bootstrap happens before the CLI logic
 
-`app/main.py` imports `ensure_runtime_ready()` and calls it immediately near the top of the file. That means the environment is repaired before argument parsing or model loading begins.
+`app/main.py` imports `ensure_runtime_ready()` and normally calls it before model loading. The launcher's Start button passes an internal skip flag after the user has used Check Runtime, so demo starts do not repeat dependency/model preparation. The Check Runtime button still runs dependency installation/checking and selected model-asset preparation.
 
 This is important because the project is designed to run on machines where:
 
