@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import os
 import sys
 from pathlib import Path
 
@@ -1413,6 +1414,12 @@ class KinaraLauncher(QMainWindow):
         installer = self._selected_python_runtime()
         if installer:
             environment.insert("KINARA_PYTHON", installer)
+        source_dir = self._source_dir()
+        python_paths = [str(source_dir / f".vendor_py{sys.version_info.major}{sys.version_info.minor}"), str(source_dir)]
+        existing_pythonpath = environment.value("PYTHONPATH")
+        if existing_pythonpath:
+            python_paths.append(existing_pythonpath)
+        environment.insert("PYTHONPATH", os.pathsep.join(python_paths))
         environment.insert("KINARA_LOG_FILE", str(log_path))
         environment.insert("KINARA_PREVIEW_FRAME", str(self.preview_frame_path))
         environment.insert("KINARA_PREVIEW_INTERVAL", "2")
@@ -1467,6 +1474,10 @@ class KinaraLauncher(QMainWindow):
 
     def _runner_command(self, args: list[str]) -> list[str]:
         if getattr(sys, "frozen", False):
+            python = self._selected_python_runtime()
+            runner = self._source_dir() / "app" / "main.py"
+            if python and runner.exists():
+                return [python, str(runner), *args]
             return [sys.executable, "--kinara-runner", *args]
         return [sys.executable, str(Path(__file__).resolve()), "--kinara-runner", *args]
 
@@ -1474,6 +1485,13 @@ class KinaraLauncher(QMainWindow):
         if getattr(sys, "frozen", False):
             return str(Path(sys.executable).resolve().parent)
         return str(PROJECT_ROOT)
+
+    def _source_dir(self) -> Path:
+        if getattr(sys, "frozen", False):
+            bundle_root = getattr(sys, "_MEIPASS", None)
+            if bundle_root:
+                return Path(bundle_root)
+        return Path(self._app_dir())
 
     def _runtime_dir(self) -> Path:
         path = Path(self._app_dir()) / ".kinara_runtime"

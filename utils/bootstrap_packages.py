@@ -259,11 +259,20 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
         packages_to_install.append("numpy")
         missing_modules.discard("numpy")
 
+    onnxruntime_requested = any(status.module_name == "onnxruntime" for status in module_statuses)
     if "onnxruntime" in missing_modules:
-        packages_to_install.append(choose_onnxruntime_distribution(report))
+        packages_to_install.extend([
+            choose_onnxruntime_distribution(report),
+            "numpy>=1.26,<2.0",
+            "protobuf>=4.25.3,<5",
+        ])
         missing_modules.discard("onnxruntime")
-    elif gpu_runtime_detected and not distribution_installed("onnxruntime-gpu"):
-        packages_to_install.append("onnxruntime-gpu")
+    elif onnxruntime_requested and gpu_runtime_detected and not distribution_installed("onnxruntime-gpu"):
+        packages_to_install.extend([
+            "onnxruntime-gpu",
+            "numpy>=1.26,<2.0",
+            "protobuf>=4.25.3,<5",
+        ])
 
     if "mediapipe" in missing_modules:
         packages_to_install.extend([

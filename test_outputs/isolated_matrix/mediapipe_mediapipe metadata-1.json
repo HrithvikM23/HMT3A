@@ -1,0 +1,77 @@
+{
+  "format": "kinara-run-metadata-v1",
+  "created_at": "2026-06-14T04:15:46.193577+00:00",
+  "git_revision": "ec1a63a",
+  "mode": "single",
+  "fps": 10.0,
+  "frame_count": 1,
+  "source": "test_inputs\\synthetic_personish.mp4",
+  "profile": "fastest",
+  "runtime": {
+    "python": "3.11.9",
+    "python_executable": "D:\\IDT\\Kinara\\.isolated_matrix_env\\Scripts\\python.exe",
+    "project_root": "D:\\IDT\\Kinara",
+    "profile": "fastest",
+    "body_backend": "mediapipe",
+    "hand_backend": "mediapipe",
+    "backend_fallbacks": false,
+    "required_modules": {
+      "cv2": true,
+      "numpy": true,
+      "mediapipe": true
+    },
+    "onnx_requested_providers": [],
+    "onnx_available_providers": [],
+    "torch_cuda_available": null,
+    "models": {
+      "body_variant": "yolo11x-pose.pt",
+      "body_path": null,
+      "hand_variant": "low",
+      "hand_path": null,
+      "mediapipe_pose_model": "pose_landmark_full.tflite",
+      "mediapipe_pose_model_path": "D:\\IDT\\Kinara\\models\\body\\pose_landmark_full.tflite",
+      "rtmpose_mode": "balanced",
+      "rtmpose_backend": "onnxruntime",
+      "rtmpose_device": "cuda"
+    },
+    "outputs": {
+      "rendered": "test_outputs\\isolated_matrix\\mediapipe_mediapipe rendered-1.mp4",
+      "json": "test_outputs\\isolated_matrix\\mediapipe_mediapipe json-1.json",
+      "fbx": "test_outputs\\isolated_matrix\\mediapipe_mediapipe fbx-1.fbx",
+      "metadata": "test_outputs\\isolated_matrix\\mediapipe_mediapipe metadata-1.json"
+    }
+  },
+  "configuration": {
+    "max_people": 1,
+    "body_backend": "mediapipe",
+    "hand_backend": "mediapipe",
+    "backend_fallbacks": false,
+    "single_camera_depth_mode": "flat",
+    "triangulate_3d": false,
+    "osc_enabled": false,
+    "body_detect_interval": 1,
+    "hand_detect_interval": 2,
+    "processing_width": 640,
+    "body_conf_threshold": 0.3,
+    "hand_kp_threshold": 0.22,
+    "identity_hints": {},
+    "camera_calibration_path": null,
+    "calibration_3d_path": null
+  },
+  "outputs": {
+    "rendered": "test_outputs\\isolated_matrix\\mediapipe_mediapipe rendered-1.mp4",
+    "json": "test_outputs\\isolated_matrix\\mediapipe_mediapipe json-1.json",
+    "fbx": "test_outputs\\isolated_matrix\\mediapipe_mediapipe fbx-1.fbx",
+    "metadata": "test_outputs\\isolated_matrix\\mediapipe_mediapipe metadata-1.json"
+  },
+  "extra": {
+    "mode": "single",
+    "profile": "fastest",
+    "body_backend": "mediapipe",
+    "hand_backend": "mediapipe",
+    "mediapipe_pose_model": "pose_landmark_full.tflite",
+    "source": "test_inputs\\synthetic_personish.mp4",
+    "body_model_variant": "yolo11x-pose.pt",
+    "hand_model_variant": "low"
+  }
+}
