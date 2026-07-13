@@ -278,7 +278,21 @@ The current fusion path supports lightweight per-camera depth overrides from JSO
 
 Kinara includes a native Windows launcher that can be built into an app folder with an `.exe`.
 
-From the repo root:
+Recommended build command from the repo root:
+
+```bat
+build.cmd
+```
+
+You can also run the Python build script directly:
+
+```bash
+py -3.11 scripts/build_exe.py
+```
+
+The Python script is the most portable build path. It avoids PowerShell execution-policy problems on laptops where `.ps1` scripts are blocked.
+
+PowerShell is still supported:
 
 ```powershell
 .\scripts\build_exe.ps1
@@ -293,6 +307,13 @@ artifacts\windows\Kinara\Kinara.exe
 Run it by double-clicking `Kinara.exe`. Keep the full `artifacts\windows\Kinara\` folder together when moving it to another machine, because the EXE depends on the `_internal` files beside it.
 
 Do not commit the built app folder to git. The build output is ignored by `.gitignore`; share it separately through a GitHub Release or a zipped build artifact.
+
+Build/runtime notes:
+
+- Set `KINARA_BUILD_PYTHON` or `KINARA_PYTHON` only when you need to force a specific Python 3.11 runtime.
+- Keep runtime dependencies, downloaded models, caches, logs, and rendered outputs out of git. The project ignores `models/`, `.vendor_py*/`, `.kinara_runtime/`, `.kinara_logs/`, `outputs/`, and `artifacts/`.
+- The app stores RTMPose and Ultralytics cache data in project-local ignored folders so logs and generated files do not need to expose private home-directory paths.
+- The EXE is distributed as a folder, not as a single standalone file. Keep `Kinara.exe` with its `_internal` folder and any runtime folders created by Check Runtime.
 
 Double-clicking `Kinara.exe` opens a native Windows desktop launcher instead of requiring terminal input. The UI uses a resizable control-deck layout: the preview/log area and the right control panel can be resized with splitter handles, with minimum and maximum constraints so the app cannot be crushed into an unusable shape.
 
@@ -318,6 +339,8 @@ During a launcher run, the processed frame is streamed back into the large previ
 
 MediaPipe is not bundled into the launcher build. The default session uses MediaPipe, so Check Runtime installs it through the normal pip flow (`python -m pip install mediapipe==0.10.21`) with the configured Python runtime into the app-local `.vendor_py311` folder. Sessions that explicitly choose YOLO body plus ONNX hands do not install MediaPipe.
 
+If Check Runtime has already prepared `.vendor_py311`, Start can skip the full dependency check while still loading those app-local packages.
+
 ---
 
 # Model Management
@@ -330,6 +353,70 @@ models/hand/
 ```
 
 That means body and hand weights stay inside the project instead of being left in external caches.
+
+RTMPose downloads are cached under:
+
+```txt
+.kinara_runtime/cache/rtmlib/
+```
+
+This folder is ignored by git.
+
+---
+
+# Privacy-Safe Development
+
+Kinara is intended to be safe to publish on a public GitHub repository.
+
+Do not commit:
+
+```txt
+local drive paths
+usernames
+Downloads/Desktop/Documents paths
+personal video filenames
+API keys or tokens
+logs, outputs, runtime caches, model weights, or built app folders
+```
+
+Use placeholders in docs and examples:
+
+```txt
+<PROJECT_ROOT>
+<VIDEO_PATH>
+<MODEL_DIR>
+<HOME>/Downloads/<FILE>
+```
+
+Runtime metadata redacts private absolute paths. Paths inside the repo are written relative to `<PROJECT_ROOT>`, and files selected from private user folders are written as placeholders instead of exact filenames.
+
+Before publishing, run a privacy scan from the repo root:
+
+```bash
+rg -n "<your privacy and secret patterns>"
+```
+
+Known safe matches include generic Windows install locations such as `C:\Program Files\...`, public repository URLs, license author text, and FBX connection lines containing `C:`.
+
+---
+
+# Smoke Testing Models
+
+Use a neutral output basename when testing private videos so the source filename does not become an output filename:
+
+```bash
+py -3.11 -m kinara --source "<VIDEO_PATH>" --no-preview --benchmark-frames 3 --output-dir ".tmp_test_runtime/video_matrix" --output-basename "mediapipe_full" --landmark-backend mediapipe --model pose_landmark_full.tflite
+```
+
+Recommended smoke matrix:
+
+```txt
+MediaPipe: pose_landmark_lite.tflite, pose_landmark_full.tflite, pose_landmark_heavy.tflite
+YOLO: yolo11n-pose.pt, yolo11s-pose.pt, yolo11m-pose.pt, yolo11l-pose.pt, yolo11x-pose.pt
+ONNX hand variants: low, mid, high, max
+RTMPose: lightweight, balanced, performance
+RTMPose WholeBody: balanced
+```
 
 ---
 

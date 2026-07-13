@@ -280,6 +280,8 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
 
     if "rtmlib" in missing_modules:
         packages_to_install.extend([
+            "numpy>=1.26,<2.0",
+            "opencv-contrib-python>=4.9,<4.12",
             "rtmlib",
             "protobuf>=4.25.3,<5",
         ])

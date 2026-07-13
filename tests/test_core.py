@@ -145,11 +145,57 @@ class CoreLogicTests(unittest.TestCase):
         ensure_runtime_ready.assert_not_called()
         run_assignment.assert_called_once()
 
+    def test_app_startup_prepares_vendor_path_even_when_bootstrap_is_skipped(self) -> None:
+        import app.main as app_main
+
+        self.assertIn(str(app_main.PROJECT_ROOT / ".vendor_py311"), sys.path)
+        self.assertEqual(os.environ.get("XDG_CACHE_HOME"), str(app_main.PROJECT_ROOT / ".kinara_runtime" / "cache"))
+
     def test_pipeline_config_allocates_metadata_path(self) -> None:
         config = PipelineConfig(output_basename="metadata_test")
 
         self.assertTrue(config.metadata_output_path.name.startswith("metadata_test metadata-"))
         self.assertTrue(config.metadata_output_path.name.endswith(".json"))
+
+    def test_runtime_report_redacts_private_absolute_paths(self) -> None:
+        from core.runtime_report import build_runtime_report
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            project_root = Path(tmp_dir) / "Kinara"
+            project_root.mkdir()
+            config = PipelineConfig(
+                project_root=project_root,
+                video_path=Path.home() / "Downloads" / "private_clip.mp4",
+                output_directory=project_root / "outputs",
+                output_basename="privacy",
+            )
+
+            report = build_runtime_report(config)
+
+        report_text = json.dumps(report)
+        self.assertNotIn(str(Path.home()), report_text)
+        self.assertNotIn("private_clip.mp4", report_text)
+        self.assertIn("<PROJECT_ROOT>", report_text)
+
+    def test_run_metadata_redacts_private_source_path(self) -> None:
+        from utils.run_metadata import build_run_metadata
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            project_root = Path(tmp_dir) / "Kinara"
+            project_root.mkdir()
+            config = PipelineConfig(
+                project_root=project_root,
+                video_path=Path.home() / "Downloads" / "private_clip.mp4",
+                output_directory=project_root / "outputs",
+                output_basename="privacy",
+            )
+
+            metadata = build_run_metadata(config, mode="test", fps=30.0, frame_count=1)
+
+        metadata_text = json.dumps(metadata)
+        self.assertNotIn(str(Path.home()), metadata_text)
+        self.assertNotIn("private_clip.mp4", metadata_text)
+        self.assertEqual(metadata["source"], "<HOME>/Downloads/<FILE>")
 
     def test_installer_python_does_not_default_to_blender_python(self) -> None:
         import utils.bootstrap_packages as bootstrap_packages
@@ -350,6 +396,17 @@ class CoreLogicTests(unittest.TestCase):
         self.assertNotIn("opencv-python", plan)
         self.assertIn("mediapipe==0.10.21", plan)
         self.assertEqual(plan.count("opencv-contrib-python>=4.9,<4.12"), 1)
+
+    def test_rtmlib_install_plan_pins_numpy_and_opencv(self) -> None:
+        from utils.bootstrap_packages import resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        plan = resolve_install_plan([ModuleStatus("rtmlib", False)], RuntimeReport())
+
+        self.assertIn("numpy>=1.26,<2.0", plan)
+        self.assertIn("opencv-contrib-python>=4.9,<4.12", plan)
+        self.assertIn("rtmlib", plan)
+        self.assertIn("protobuf>=4.25.3,<5", plan)
 
     def test_installed_mediapipe_repair_plan_pins_new_protobuf(self) -> None:
         import utils.bootstrap_packages as bootstrap_packages

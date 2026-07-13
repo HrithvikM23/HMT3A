@@ -830,7 +830,7 @@ class KinaraLauncher(QMainWindow):
 
         picker = QHBoxLayout()
         self.python_path = QLineEdit(installer_python_path())
-        self.python_path.setPlaceholderText(r"C:\Users\...\Python311 or ...\Python311\python.exe")
+        self.python_path.setPlaceholderText(r"<PYTHON_3_11_DIR>\python.exe")
         browse = QToolButton()
         browse.setObjectName("iconButton")
         browse.setToolTip("Browse for python.exe")

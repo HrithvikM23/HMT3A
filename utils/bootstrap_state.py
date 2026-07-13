@@ -9,6 +9,7 @@ from utils.logging import safe_print
 PROJECT_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 VENDOR_DIR = PROJECT_ROOT / f".vendor_py{sys.version_info.major}{sys.version_info.minor}"
 ULTRALYTICS_CONFIG_DIR = PROJECT_ROOT / ".ultralytics"
+RUNTIME_CACHE_DIR = PROJECT_ROOT / ".kinara_runtime" / "cache"
 
 REQUIRED_PROJECT_FILES = (
     Path("app") / "main.py",

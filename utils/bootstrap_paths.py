@@ -6,7 +6,7 @@ import site
 import sys
 from pathlib import Path
 
-from utils.bootstrap_state import PROJECT_ROOT, REQUIRED_PROJECT_FILES, ULTRALYTICS_CONFIG_DIR, VENDOR_DIR
+from utils.bootstrap_state import PROJECT_ROOT, REQUIRED_PROJECT_FILES, RUNTIME_CACHE_DIR, ULTRALYTICS_CONFIG_DIR, VENDOR_DIR
 
 try:
     import winreg
@@ -172,6 +172,8 @@ def find_missing_project_files() -> list[Path]:
 def ensure_local_environment() -> None:
     VENDOR_DIR.mkdir(parents=True, exist_ok=True)
     ULTRALYTICS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    RUNTIME_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     prepend_sys_path(VENDOR_DIR)
     prepend_pythonpath(VENDOR_DIR)
     os.environ.setdefault("YOLO_CONFIG_DIR", str(ULTRALYTICS_CONFIG_DIR))
+    os.environ.setdefault("XDG_CACHE_HOME", str(RUNTIME_CACHE_DIR))

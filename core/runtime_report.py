@@ -6,6 +6,7 @@ from pathlib import Path
 
 from core.backend_selection import needs_mediapipe, needs_onnx_hand, needs_rtmpose_body, needs_yolo_body
 from core.config import PipelineConfig
+from utils.privacy import public_path
 
 
 def _module_available(module_name: str) -> bool:
@@ -44,10 +45,11 @@ def build_runtime_report(config: PipelineConfig) -> dict[str, object]:
         for module_name in dict.fromkeys(required_modules)
     }
     uses_onnxruntime = "onnxruntime" in module_status
+    project_root = config.project_root
     return {
         "python": sys.version.split()[0],
-        "python_executable": sys.executable,
-        "project_root": str(config.project_root),
+        "python_executable": public_path(sys.executable, project_root=project_root),
+        "project_root": public_path(project_root, project_root=project_root),
         "profile": config.profile,
         "body_backend": config.body_backend,
         "hand_backend": config.hand_backend,
@@ -58,22 +60,22 @@ def build_runtime_report(config: PipelineConfig) -> dict[str, object]:
         "torch_cuda_available": _torch_cuda_available() if module_status.get("torch") else None,
         "models": {
             "body_variant": config.body_model_variant,
-            "body_path": None if config.body_model_path is None else str(config.body_model_path),
+            "body_path": public_path(config.body_model_path, project_root=project_root),
             "hand_variant": config.hand_model_variant,
-            "hand_path": None if config.hand_model_path is None else str(config.hand_model_path),
+            "hand_path": public_path(config.hand_model_path, project_root=project_root),
             "mediapipe_pose_model": config.mediapipe_pose_model,
             "mediapipe_pose_model_path": (
-                None if config.mediapipe_pose_model_path is None else str(config.mediapipe_pose_model_path)
+                public_path(config.mediapipe_pose_model_path, project_root=project_root)
             ),
             "rtmpose_mode": config.rtmpose_mode,
             "rtmpose_backend": config.rtmpose_backend,
             "rtmpose_device": config.rtmpose_device,
         },
         "outputs": {
-            "rendered": str(config.rendered_output_path),
-            "json": str(config.json_output_path),
-            "fbx": str(config.fbx_output_path),
-            "metadata": str(config.metadata_output_path),
+            "rendered": public_path(config.rendered_output_path, project_root=project_root),
+            "json": public_path(config.json_output_path, project_root=project_root),
+            "fbx": public_path(config.fbx_output_path, project_root=project_root),
+            "metadata": public_path(config.metadata_output_path, project_root=project_root),
         },
     }
 
