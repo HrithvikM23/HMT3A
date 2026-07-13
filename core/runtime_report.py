@@ -65,6 +65,13 @@ def build_runtime_report(config: PipelineConfig) -> dict[str, object]:
             "mediapipe_pose_model_path": (
                 None if config.mediapipe_pose_model_path is None else str(config.mediapipe_pose_model_path)
             ),
+            "mediapipe_delegate": config.mediapipe_delegate,
+            "mediapipe_pose_task_path": (
+                None if config.mediapipe_pose_task_path is None else str(config.mediapipe_pose_task_path)
+            ),
+            "mediapipe_hand_task_path": (
+                None if config.mediapipe_hand_task_path is None else str(config.mediapipe_hand_task_path)
+            ),
             "rtmpose_mode": config.rtmpose_mode,
             "rtmpose_backend": config.rtmpose_backend,
             "rtmpose_device": config.rtmpose_device,

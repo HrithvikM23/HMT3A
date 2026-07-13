@@ -147,6 +147,12 @@ class ONNXPoseHandRunner:
             self._configure_yolo_runtime()
         self._mp_pose = None
         self._mp_hands = None
+        self._mp_pose_task = None
+        self._mp_hand_task = None
+        self._mp_image_cls = None
+        self._mp_image_format = None
+        self._mp_pose_timestamp_ms = 0
+        self._mp_hand_timestamp_ms = 0
         self._mp_available = False
         if self._uses_mediapipe:
             self._setup_mediapipe()
@@ -212,6 +218,14 @@ class ONNXPoseHandRunner:
             return
 
         self._mp_available = True
+        if self.config.mediapipe_delegate == "gpu":
+            try:
+                self._setup_mediapipe_tasks(mp)
+            except Exception as exc:
+                print(
+                    "Warning: MediaPipe GPU delegate could not be initialized "
+                    f"({exc}); using MediaPipe CPU solutions fallback."
+                )
         if self.config.body_backend == "mediapipe" or self.config.enable_backend_fallbacks:
             self._mp_pose = self._create_mediapipe_pose(mp)
         if self.config.hand_backend == "mediapipe" or self.config.enable_backend_fallbacks:
@@ -223,6 +237,45 @@ class ONNXPoseHandRunner:
                 min_detection_confidence=self.config.hand_det_threshold,
                 min_tracking_confidence=self.config.hand_det_threshold,
             )
+
+    def _setup_mediapipe_tasks(self, mp: Any) -> None:
+        tasks = cast(Any, mp.tasks)
+        vision = tasks.vision
+        base_options_cls = tasks.BaseOptions
+        delegate = base_options_cls.Delegate.GPU
+        running_mode = vision.RunningMode.VIDEO
+
+        self._mp_image_cls = mp.Image
+        self._mp_image_format = mp.ImageFormat.SRGB
+
+        if self.config.body_backend == "mediapipe" or self.config.enable_backend_fallbacks:
+            pose_task_path = self.config.mediapipe_pose_task_path
+            if pose_task_path is None:
+                raise RuntimeError("MediaPipe pose task model is not prepared.")
+            pose_options = vision.PoseLandmarkerOptions(
+                base_options=base_options_cls(model_asset_path=str(pose_task_path), delegate=delegate),
+                running_mode=running_mode,
+                num_poses=1,
+                min_pose_detection_confidence=self.config.body_conf_threshold,
+                min_pose_presence_confidence=self.config.body_conf_threshold,
+                min_tracking_confidence=self.config.body_conf_threshold,
+                output_segmentation_masks=False,
+            )
+            self._mp_pose_task = vision.PoseLandmarker.create_from_options(pose_options)
+
+        if self.config.hand_backend == "mediapipe" or self.config.enable_backend_fallbacks:
+            hand_task_path = self.config.mediapipe_hand_task_path
+            if hand_task_path is None:
+                raise RuntimeError("MediaPipe hand task model is not prepared.")
+            hand_options = vision.HandLandmarkerOptions(
+                base_options=base_options_cls(model_asset_path=str(hand_task_path), delegate=delegate),
+                running_mode=running_mode,
+                num_hands=1,
+                min_hand_detection_confidence=self.config.hand_det_threshold,
+                min_hand_presence_confidence=self.config.hand_det_threshold,
+                min_tracking_confidence=self.config.hand_det_threshold,
+            )
+            self._mp_hand_task = vision.HandLandmarker.create_from_options(hand_options)
 
     def _create_mediapipe_pose(self, mp: Any):
         requested_model = self.config.mediapipe_pose_model
@@ -280,7 +333,13 @@ class ONNXPoseHandRunner:
         return cast(list[tuple[int, int, float]], detections[0]["body_points"])
 
     def _detect_body_mediapipe(self, frame_bgr):
-        if not self._mp_available or self._mp_pose is None:
+        if not self._mp_available:
+            return None
+        if self._mp_pose_task is not None:
+            body_points = self._detect_body_mediapipe_task(frame_bgr)
+            if body_points is not None:
+                return body_points
+        if self._mp_pose is None:
             return None
 
         frame_height, frame_width = frame_bgr.shape[:2]
@@ -322,6 +381,88 @@ class ONNXPoseHandRunner:
             confidence = float(getattr(landmark, "visibility", 1.0))
             body_points.append((px, py, confidence))
         world_landmarks = None if result.pose_world_landmarks is None else result.pose_world_landmarks.landmark
+        self.last_body_depths = self._mediapipe_body_depths(
+            image_landmarks=landmarks,
+            world_landmarks=world_landmarks,
+            frame_width=frame_width,
+            frame_height=frame_height,
+        )
+        return body_points
+
+    @staticmethod
+    def _mediapipe_landmark_confidence(landmark: Any, default: float = 1.0) -> float:
+        visibility = getattr(landmark, "visibility", None)
+        if visibility is not None:
+            return float(visibility)
+        presence = getattr(landmark, "presence", None)
+        if presence is not None:
+            return float(presence)
+        return default
+
+    def _next_mediapipe_timestamp(self, attribute_name: str) -> int:
+        frame_ms = max(1, int(round(1000.0 / max(float(self.config.fallback_fps), 1.0))))
+        timestamp_ms = int(getattr(self, attribute_name)) + frame_ms
+        setattr(self, attribute_name, timestamp_ms)
+        return timestamp_ms
+
+    def _mediapipe_task_image(self, frame_rgb: np.ndarray[Any, Any]) -> Any:
+        image_cls = self._mp_image_cls
+        image_format = self._mp_image_format
+        if image_cls is None or image_format is None:
+            raise RuntimeError("MediaPipe task image classes are not initialized.")
+        return image_cls(image_format=image_format, data=np.ascontiguousarray(frame_rgb))
+
+    def _detect_body_mediapipe_task(self, frame_bgr):
+        pose_task = self._mp_pose_task
+        if pose_task is None:
+            return None
+        frame_height, frame_width = frame_bgr.shape[:2]
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        try:
+            result = pose_task.detect_for_video(
+                self._mediapipe_task_image(frame_rgb),
+                self._next_mediapipe_timestamp("_mp_pose_timestamp_ms"),
+            )
+        except Exception as exc:
+            print(f"Warning: MediaPipe GPU pose detection failed ({exc}); using CPU solutions fallback.")
+            self._mp_pose_task = None
+            return None
+
+        pose_landmarks = getattr(result, "pose_landmarks", None) or []
+        if not pose_landmarks:
+            return None
+        landmarks = pose_landmarks[0]
+        mapping = (
+            0,
+            2,
+            5,
+            7,
+            8,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+        )
+        body_points = []
+        for mp_index in mapping:
+            landmark = landmarks[mp_index]
+            px = int(round(float(landmark.x) * frame_width))
+            py = int(round(float(landmark.y) * frame_height))
+            body_points.append((px, py, self._mediapipe_landmark_confidence(landmark)))
+        world_landmarks_by_pose = getattr(result, "pose_world_landmarks", None) or []
+        world_landmarks = world_landmarks_by_pose[0] if world_landmarks_by_pose else None
         self.last_body_depths = self._mediapipe_body_depths(
             image_landmarks=landmarks,
             world_landmarks=world_landmarks,
@@ -636,7 +777,13 @@ class ONNXPoseHandRunner:
         return points
 
     def _detect_hand_mediapipe(self, frame_bgr, box):
-        if not self._mp_available or self._mp_hands is None:
+        if not self._mp_available:
+            return None
+        if self._mp_hand_task is not None:
+            hand_points = self._detect_hand_mediapipe_task(frame_bgr, box)
+            if hand_points is not None:
+                return hand_points
+        if self._mp_hands is None:
             return None
 
         x1, y1, x2, y2 = box
@@ -659,6 +806,44 @@ class ONNXPoseHandRunner:
             py = y1 + int(round(float(landmark.y) * crop_height))
             relative_z = float(getattr(landmark, "z", 0.0))
             confidence = 1.0 - min(abs(relative_z), 0.85)
+            points.append((px, py, confidence))
+        self.last_hand_depths = self._mediapipe_hand_depths(landmarks, world_landmarks, crop_width, crop_height)
+        return points
+
+    def _detect_hand_mediapipe_task(self, frame_bgr, box):
+        hand_task = self._mp_hand_task
+        if hand_task is None:
+            return None
+        x1, y1, x2, y2 = box
+        crop = frame_bgr[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+
+        crop_height, crop_width = crop.shape[:2]
+        crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        try:
+            result = hand_task.detect_for_video(
+                self._mediapipe_task_image(crop_rgb),
+                self._next_mediapipe_timestamp("_mp_hand_timestamp_ms"),
+            )
+        except Exception as exc:
+            print(f"Warning: MediaPipe GPU hand detection failed ({exc}); using CPU solutions fallback.")
+            self._mp_hand_task = None
+            return None
+
+        hand_landmarks = getattr(result, "hand_landmarks", None) or []
+        if not hand_landmarks:
+            return None
+        landmarks = hand_landmarks[0]
+        world_landmarks_by_hand = getattr(result, "hand_world_landmarks", None) or []
+        world_landmarks = world_landmarks_by_hand[0] if world_landmarks_by_hand else None
+
+        points = []
+        for landmark in landmarks:
+            px = x1 + int(round(float(landmark.x) * crop_width))
+            py = y1 + int(round(float(landmark.y) * crop_height))
+            relative_z = float(getattr(landmark, "z", 0.0))
+            confidence = self._mediapipe_landmark_confidence(landmark, 1.0 - min(abs(relative_z), 0.85))
             points.append((px, py, confidence))
         self.last_hand_depths = self._mediapipe_hand_depths(landmarks, world_landmarks, crop_width, crop_height)
         return points

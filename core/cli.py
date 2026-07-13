@@ -301,6 +301,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Try the alternate backend when the selected body or hand backend misses a frame.",
     )
     parser.add_argument(
+        "--mediapipe-delegate",
+        choices=("cpu", "gpu"),
+        default="cpu",
+        help="Experimental MediaPipe Tasks delegate. gpu is tried where supported and falls back to the CPU solutions path.",
+    )
+    parser.add_argument(
         "--hand-model-variant",
         choices=("low", "mid", "high", "max"),
         default="max",

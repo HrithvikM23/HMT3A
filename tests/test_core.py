@@ -185,6 +185,22 @@ class CoreLogicTests(unittest.TestCase):
 
         self.assertEqual(Path(installer).resolve(), Path(original_python).resolve())
 
+    def test_runtime_root_env_controls_vendor_location(self) -> None:
+        import importlib
+
+        import utils.bootstrap_state as bootstrap_state
+
+        original_runtime_root = bootstrap_state.RUNTIME_ROOT
+        original_vendor_dir = bootstrap_state.VENDOR_DIR
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.dict(os.environ, {"KINARA_RUNTIME_ROOT": tmp_dir}, clear=False):
+            reloaded = importlib.reload(bootstrap_state)
+            self.assertEqual(reloaded.RUNTIME_ROOT, Path(tmp_dir).resolve())
+            self.assertEqual(reloaded.VENDOR_DIR, Path(tmp_dir).resolve() / f".vendor_py{sys.version_info.major}{sys.version_info.minor}")
+
+        reloaded = importlib.reload(bootstrap_state)
+        self.assertEqual(reloaded.RUNTIME_ROOT, original_runtime_root)
+        self.assertEqual(reloaded.VENDOR_DIR, original_vendor_dir)
+
     def test_calibration_mode_requests_calibration_runtime_modules(self) -> None:
         from utils.bootstrap_dependencies import _selected_runtime_modules
 
@@ -333,6 +349,173 @@ class CoreLogicTests(unittest.TestCase):
         self.assertIn("protobuf>=4.25.3,<5", plan)
         self.assertIn("jax==0.7.1", plan)
         self.assertIn("jaxlib==0.7.1", plan)
+
+    def test_rtmpose_install_plan_pins_numpy_and_opencv(self) -> None:
+        from utils.bootstrap_packages import resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        plan = resolve_install_plan([ModuleStatus("rtmlib", False)], RuntimeReport())
+
+        self.assertIn("rtmlib", plan)
+        self.assertIn("numpy>=1.26,<2.0", plan)
+        self.assertIn("opencv-contrib-python>=4.9,<4.12", plan)
+        self.assertIn("opencv-python>=4.9,<4.12", plan)
+        self.assertIn("protobuf>=4.25.3,<5", plan)
+
+    def test_yolo_install_plan_uses_cuda_pytorch_when_cuda_detected(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+        from utils.bootstrap_packages import PYTORCH_CUDA_MARKER, resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        report = RuntimeReport(nvidia_driver_detected=True, cuda_bin_dirs=[Path("C:/CUDA/bin")])
+        with patch.object(bootstrap_packages, "torch_cuda_available", return_value=False):
+            plan = resolve_install_plan(
+                [
+                    ModuleStatus("torch", False),
+                    ModuleStatus("torchvision", False),
+                    ModuleStatus("ultralytics", False),
+                ],
+                report,
+            )
+
+        self.assertIn(PYTORCH_CUDA_MARKER, plan)
+        self.assertIn("torch", plan)
+        self.assertIn("torchvision", plan)
+        self.assertIn("ultralytics", plan)
+
+    def test_yolo_install_plan_uses_cpu_pytorch_without_cuda(self) -> None:
+        from utils.bootstrap_packages import PYTORCH_CPU_MARKER, resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        plan = resolve_install_plan(
+            [
+                ModuleStatus("torch", False),
+                ModuleStatus("torchvision", False),
+                ModuleStatus("ultralytics", False),
+            ],
+            RuntimeReport(),
+        )
+
+        self.assertIn(PYTORCH_CPU_MARKER, plan)
+        self.assertIn("torch", plan)
+        self.assertIn("torchvision", plan)
+        self.assertIn("ultralytics", plan)
+
+    def test_yolo_install_plan_uses_rocm_pytorch_when_rocm_detected(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+        from utils.bootstrap_packages import PYTORCH_ROCM_MARKER, resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        report = RuntimeReport(amd_driver_detected=True, rocm_bin_dirs=[Path("/opt/rocm/bin")])
+        with patch.object(bootstrap_packages, "torch_cuda_available", return_value=False):
+            plan = resolve_install_plan(
+                [
+                    ModuleStatus("torch", False),
+                    ModuleStatus("torchvision", False),
+                    ModuleStatus("ultralytics", False),
+                ],
+                report,
+            )
+
+        self.assertIn(PYTORCH_ROCM_MARKER, plan)
+        self.assertIn("torch", plan)
+        self.assertIn("torchvision", plan)
+        self.assertIn("ultralytics", plan)
+
+    def test_yolo_install_plan_prefers_cuda_over_rocm_when_both_detected(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+        from utils.bootstrap_packages import PYTORCH_CUDA_MARKER, PYTORCH_ROCM_MARKER, resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        report = RuntimeReport(
+            nvidia_driver_detected=True,
+            amd_driver_detected=True,
+            cuda_bin_dirs=[Path("C:/CUDA/bin")],
+            rocm_bin_dirs=[Path("/opt/rocm/bin")],
+        )
+        with patch.object(bootstrap_packages, "torch_cuda_available", return_value=False):
+            plan = resolve_install_plan(
+                [
+                    ModuleStatus("torch", False),
+                    ModuleStatus("torchvision", False),
+                    ModuleStatus("ultralytics", False),
+                ],
+                report,
+            )
+
+        self.assertIn(PYTORCH_CUDA_MARKER, plan)
+        self.assertNotIn(PYTORCH_ROCM_MARKER, plan)
+
+    def test_yolo_install_plan_repairs_cpu_torch_on_cuda_machine(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+        from utils.bootstrap_packages import PYTORCH_CUDA_MARKER, resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        report = RuntimeReport(nvidia_driver_detected=True, cuda_bin_dirs=[Path("C:/CUDA/bin")])
+        with patch.object(bootstrap_packages, "torch_cuda_available", return_value=False):
+            plan = resolve_install_plan(
+                [
+                    ModuleStatus("torch", True),
+                    ModuleStatus("torchvision", True),
+                    ModuleStatus("ultralytics", True),
+                ],
+                report,
+            )
+
+        self.assertIn(PYTORCH_CUDA_MARKER, plan)
+        self.assertIn("torch", plan)
+        self.assertIn("torchvision", plan)
+
+    def test_yolo_install_plan_repairs_cpu_torch_on_rocm_machine(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+        from utils.bootstrap_packages import PYTORCH_ROCM_MARKER, resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        report = RuntimeReport(amd_driver_detected=True, rocm_bin_dirs=[Path("/opt/rocm/bin")])
+        with patch.object(bootstrap_packages, "torch_cuda_available", return_value=False):
+            plan = resolve_install_plan(
+                [
+                    ModuleStatus("torch", True),
+                    ModuleStatus("torchvision", True),
+                    ModuleStatus("ultralytics", True),
+                ],
+                report,
+            )
+
+        self.assertIn(PYTORCH_ROCM_MARKER, plan)
+        self.assertIn("torch", plan)
+        self.assertIn("torchvision", plan)
+
+    def test_install_pytorch_packages_uses_rocm_index(self) -> None:
+        import utils.bootstrap_packages as bootstrap_packages
+        from utils.bootstrap_packages import PYTORCH_ROCM_INDEX_URL
+
+        captured_commands = []
+
+        def fake_run(command, **_kwargs):
+            captured_commands.append(command)
+
+        with patch.object(bootstrap_packages, "run_logged_subprocess", side_effect=fake_run):
+            bootstrap_packages._install_pytorch_packages(
+                ["torch", "torchvision"],
+                accelerator="rocm",
+                python=sys.executable,
+                env={},
+            )
+
+        self.assertTrue(captured_commands)
+        command = captured_commands[0]
+        self.assertIn("--index-url", command)
+        self.assertIn(PYTORCH_ROCM_INDEX_URL, command)
+
+    def test_onnxruntime_install_plan_uses_gpu_when_cuda_detected_without_cudnn(self) -> None:
+        from utils.bootstrap_packages import resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        report = RuntimeReport(nvidia_driver_detected=True, cuda_bin_dirs=[Path("C:/CUDA/bin")])
+        plan = resolve_install_plan([ModuleStatus("onnxruntime", False)], report)
+
+        self.assertIn("onnxruntime-gpu", plan)
 
     def test_mediapipe_install_plan_uses_single_opencv_flavor(self) -> None:
         from utils.bootstrap_packages import resolve_install_plan
@@ -510,6 +693,20 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(config.body_backend, "mediapipe")
         self.assertEqual(config.hand_backend, "mediapipe")
         self.assertEqual(config.mediapipe_pose_model, "pose_landmark_full.tflite")
+        self.assertEqual(config.mediapipe_delegate, "cpu")
+
+    def test_cli_mediapipe_gpu_delegate_build_config(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "--source", "0",
+            "--landmark-backend", "mediapipe",
+            "--mediapipe-delegate", "gpu",
+        ])
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
+
+        self.assertEqual(config.body_backend, "mediapipe")
+        self.assertEqual(config.hand_backend, "mediapipe")
+        self.assertEqual(config.mediapipe_delegate, "gpu")
 
     def test_profile_yolo_model_does_not_pollute_mediapipe_backend(self) -> None:
         parser = build_parser()
@@ -575,6 +772,42 @@ class CoreLogicTests(unittest.TestCase):
         assert config.mediapipe_pose_model_path is not None
         self.assertEqual(config.mediapipe_pose_model_path.name, "pose_landmark_full.tflite")
         self.assertTrue(config.mediapipe_pose_model_path.exists())
+
+    def test_prepare_model_assets_stages_mediapipe_task_files_for_gpu_delegate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            pose_model_path = root / "pose_landmark_full.tflite"
+            hand_asset_path = root / "hand_landmark_full.tflite"
+            pose_task_path = root / "pose_landmarker_full.task"
+            hand_task_path = root / "hand_landmarker.task"
+            for path in (pose_model_path, hand_asset_path, pose_task_path, hand_task_path):
+                path.write_bytes(b"model")
+            config = PipelineConfig(
+                project_root=root,
+                body_backend="mediapipe",
+                hand_backend="mediapipe",
+                mediapipe_delegate="gpu",
+            )
+
+            with (
+                patch("core.runtime_config.ensure_mediapipe_pose_model_file", return_value=pose_model_path),
+                patch("core.runtime_config.ensure_mediapipe_hand_asset_files", return_value=(hand_asset_path,)),
+                patch("core.runtime_config.ensure_mediapipe_pose_task_file", return_value=pose_task_path),
+                patch("core.runtime_config.ensure_mediapipe_hand_task_file", return_value=hand_task_path),
+            ):
+                prepare_model_assets(config)
+
+        self.assertEqual(config.mediapipe_pose_model_path, pose_model_path)
+        self.assertEqual(config.mediapipe_pose_task_path, pose_task_path)
+        self.assertEqual(config.mediapipe_hand_task_path, hand_task_path)
+
+    def test_validate_config_rejects_invalid_mediapipe_delegate(self) -> None:
+        config = PipelineConfig(mediapipe_delegate="cuda")
+
+        with redirect_stdout(io.StringIO()):
+            valid = validate_config(config)
+
+        self.assertFalse(valid)
 
     def test_mediapipe_hand_backend_uses_single_crop(self) -> None:
         config = PipelineConfig(hand_backend="mediapipe", hand_crop_retries=3)

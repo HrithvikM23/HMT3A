@@ -30,6 +30,54 @@ def find_nvidia_smi() -> Path | None:
     return None
 
 
+def find_amd_smi() -> Path | None:
+    for command in ("amd-smi", "rocm-smi", "rocminfo"):
+        command_path = shutil.which(command)
+        if command_path:
+            return Path(command_path)
+
+    common_paths = (
+        Path(r"C:\Program Files\AMD\ROCm\bin\amd-smi.exe"),
+        Path(r"C:\Program Files\AMD\ROCm\bin\rocminfo.exe"),
+    )
+    for common_path in common_paths:
+        if common_path.exists():
+            return common_path
+    return None
+
+
+def collect_rocm_runtime_roots() -> list[Path]:
+    roots: list[Path] = []
+    env_names = ("ROCM_PATH", "ROCM_HOME", "HIP_PATH", "HIPSDK_PATH")
+    for env_name in env_names:
+        raw_value = os.environ.get(env_name)
+        if not raw_value:
+            continue
+        candidate = Path(raw_value)
+        if path_is_dir(candidate):
+            roots.append(candidate)
+
+    windows_roots = (
+        Path(r"C:\Program Files\AMD\ROCm"),
+        Path(r"C:\Program Files\AMD\ROCm SDK"),
+    )
+    for root in windows_roots:
+        if path_is_dir(root):
+            roots.append(root)
+            roots.extend(safe_iter_dirs(root))
+
+    linux_roots = (
+        Path("/opt/rocm"),
+        Path("/usr/local/rocm"),
+    )
+    for root in linux_roots:
+        if path_is_dir(root):
+            roots.append(root)
+            roots.extend(safe_iter_dirs(root))
+
+    return dedupe_paths(roots)
+
+
 def collect_runtime_roots() -> list[Path]:
     roots: list[Path] = []
     env_names = ("CUDA_PATH", "CUDA_HOME", "CUDA_ROOT", "CUDNN_PATH")
@@ -121,6 +169,7 @@ def include_candidates(root: Path) -> list[Path]:
 def inspect_runtime() -> RuntimeReport:
     report = RuntimeReport()
     nvidia_smi_path = find_nvidia_smi()
+    amd_smi_path = find_amd_smi()
 
     if nvidia_smi_path is not None:
         try:
@@ -135,6 +184,19 @@ def inspect_runtime() -> RuntimeReport:
         except (OSError, subprocess.SubprocessError):
             report.nvidia_driver_detected = False
 
+    if amd_smi_path is not None:
+        try:
+            completed = subprocess.run(
+                [str(amd_smi_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            report.amd_driver_detected = completed.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            report.amd_driver_detected = False
+
     for root in collect_runtime_roots():
         for bin_dir in bin_candidates(root):
             if path_has_glob(bin_dir, "cudart*.dll"):
@@ -148,10 +210,24 @@ def inspect_runtime() -> RuntimeReport:
             if (include_dir / "cudnn.h").exists() or any(include_dir.glob("cudnn*.h")):
                 report.cudnn_include_dirs.append(include_dir)
 
+    for root in collect_rocm_runtime_roots():
+        for bin_dir in bin_candidates(root):
+            if path_has_glob(bin_dir, "amdhip64*.dll") or path_has_glob(bin_dir, "hiprtc*.dll") or path_has_glob(bin_dir, "libamdhip64.so*"):
+                report.rocm_bin_dirs.append(bin_dir)
+
+        for include_dir in include_candidates(root):
+            if (include_dir / "hip" / "hip_runtime.h").exists() or (include_dir / "hip_runtime.h").exists():
+                report.rocm_include_dirs.append(include_dir)
+
     report.cuda_bin_dirs = dedupe_paths(report.cuda_bin_dirs)
     report.cudnn_bin_dirs = dedupe_paths(report.cudnn_bin_dirs)
+    report.rocm_bin_dirs = dedupe_paths(report.rocm_bin_dirs)
     report.cuda_include_dirs = dedupe_paths(report.cuda_include_dirs)
     report.cudnn_include_dirs = dedupe_paths(report.cudnn_include_dirs)
+    report.rocm_include_dirs = dedupe_paths(report.rocm_include_dirs)
+
+    if report.rocm_bin_dirs:
+        report.amd_driver_detected = True
 
     if report.nvidia_driver_detected and not report.cuda_bin_dirs:
         report.warnings.append("NVIDIA driver detected but CUDA runtime DLLs were not found. Kinara may fall back to CPU.")
@@ -159,12 +235,14 @@ def inspect_runtime() -> RuntimeReport:
         report.warnings.append("NVIDIA driver detected but cuDNN DLLs were not found. CUDAExecutionProvider may stay unavailable.")
     if report.nvidia_driver_detected and not report.cudnn_include_dirs:
         report.warnings.append("cuDNN headers were not found in common install locations.")
+    if report.amd_driver_detected and not report.rocm_bin_dirs:
+        report.warnings.append("AMD GPU/ROCm signal detected but ROCm/HIP runtime libraries were not found. Kinara may fall back to CPU.")
 
     return report
 
 
 def repair_runtime_paths(report: RuntimeReport, persist: bool) -> None:
-    candidate_dirs = dedupe_paths([*report.cudnn_bin_dirs, *report.cuda_bin_dirs])
+    candidate_dirs = dedupe_paths([*report.cudnn_bin_dirs, *report.cuda_bin_dirs, *report.rocm_bin_dirs])
     for candidate_dir in candidate_dirs:
         if prepend_env_path(candidate_dir):
             report.path_updates.append(candidate_dir)
@@ -177,6 +255,13 @@ def repair_runtime_paths(report: RuntimeReport, persist: bool) -> None:
     if report.cudnn_bin_dirs and "CUDNN_PATH" not in os.environ:
         cudnn_root = report.cudnn_bin_dirs[0].parent if report.cudnn_bin_dirs[0].name.lower() == "bin" else report.cudnn_bin_dirs[0]
         os.environ["CUDNN_PATH"] = str(cudnn_root)
+
+    if report.rocm_bin_dirs and "ROCM_PATH" not in os.environ:
+        rocm_root = report.rocm_bin_dirs[0].parent if report.rocm_bin_dirs[0].name.lower() == "bin" else report.rocm_bin_dirs[0]
+        os.environ["ROCM_PATH"] = str(rocm_root)
+    if report.rocm_bin_dirs and "HIP_PATH" not in os.environ:
+        hip_root = report.rocm_bin_dirs[0].parent if report.rocm_bin_dirs[0].name.lower() == "bin" else report.rocm_bin_dirs[0]
+        os.environ["HIP_PATH"] = str(hip_root)
 
     if persist:
         report.warnings.extend(persist_user_path(report.path_updates))

@@ -82,6 +82,7 @@ ADVANCED_CATEGORY_BY_DEST = {
     "body_backend": "Model",
     "hand_backend": "Model",
     "backend_fallbacks": "Model",
+    "mediapipe_delegate": "Model",
     "model": "Model",
     "body_input_size": "Model",
     "processing_width": "Model",
@@ -248,6 +249,16 @@ LAUNCHER_PRESETS = (
             "rtmpose_device": "cuda",
             "rtmpose_mode": "balanced",
             "rtmpose_tracking": True,
+        },
+    },
+    {
+        "title": "MediaPipe GPU Try",
+        "description": "Try MediaPipe Tasks GPU delegate and fall back to CPU if unsupported.",
+        "section": "Model",
+        "people": 1,
+        "values": {
+            "landmark_backend": "mediapipe",
+            "mediapipe_delegate": "gpu",
         },
     },
     {
@@ -603,11 +614,10 @@ class KinaraLauncher(QMainWindow):
         tab = QWidget()
         tab.setObjectName("tabPage")
         outer = QVBoxLayout(tab)
-        outer.setSpacing(10)
+        outer.setSpacing(6)
 
-        hint = QLabel("One-click setups for common demo and capture situations.")
+        hint = QLabel("Quick setups")
         hint.setObjectName("hint")
-        hint.setWordWrap(True)
         outer.addWidget(hint)
 
         scroll = QScrollArea()
@@ -616,8 +626,8 @@ class KinaraLauncher(QMainWindow):
         content = QWidget()
         content.setObjectName("scrollContent")
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(10)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(6)
         for preset in LAUNCHER_PRESETS:
             layout.addWidget(self._preset_card(preset))
         layout.addStretch(1)
@@ -628,26 +638,35 @@ class KinaraLauncher(QMainWindow):
     def _preset_card(self, preset: dict[str, object]) -> QFrame:
         card = QFrame()
         card.setObjectName("presetCard")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(8, 7, 8, 7)
         layout.setSpacing(8)
 
-        title_row = QHBoxLayout()
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(2)
         title = QLabel(str(preset["title"]))
         title.setObjectName("advancedLabel")
-        title_row.addWidget(title, 1)
+        title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         pill = QLabel(str(preset.get("section", "Preset")))
         pill.setObjectName("presetPill")
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(6)
+        title_row.addWidget(title, 1)
         title_row.addWidget(pill)
-        layout.addLayout(title_row)
+        text_layout.addLayout(title_row)
 
         description = QLabel(str(preset["description"]))
         description.setObjectName("hint")
-        description.setWordWrap(True)
-        layout.addWidget(description)
+        description.setWordWrap(False)
+        description.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        description.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        text_layout.addWidget(description)
+        layout.addLayout(text_layout, 1)
 
         apply_button = QPushButton("Apply")
         apply_button.setObjectName("primaryButton")
+        apply_button.setFixedWidth(68)
         apply_button.clicked.connect(lambda _checked=False, selected=preset: self._apply_launcher_preset(selected))
         layout.addWidget(apply_button)
         return card
@@ -1415,11 +1434,14 @@ class KinaraLauncher(QMainWindow):
         if installer:
             environment.insert("KINARA_PYTHON", installer)
         source_dir = self._source_dir()
-        python_paths = [str(source_dir / f".vendor_py{sys.version_info.major}{sys.version_info.minor}"), str(source_dir)]
+        app_dir = Path(self._app_dir())
+        runtime_vendor_dir = app_dir / f".vendor_py{sys.version_info.major}{sys.version_info.minor}"
+        python_paths = [str(runtime_vendor_dir), str(source_dir)]
         existing_pythonpath = environment.value("PYTHONPATH")
         if existing_pythonpath:
             python_paths.append(existing_pythonpath)
         environment.insert("PYTHONPATH", os.pathsep.join(python_paths))
+        environment.insert("KINARA_RUNTIME_ROOT", str(app_dir))
         environment.insert("KINARA_LOG_FILE", str(log_path))
         environment.insert("KINARA_PREVIEW_FRAME", str(self.preview_frame_path))
         environment.insert("KINARA_PREVIEW_INTERVAL", "2")
@@ -1732,7 +1754,7 @@ QLabel#brandPill, QLabel#presetPill {{
     color: {colors["title"]};
     font-size: 8pt;
     font-weight: 800;
-    padding: 5px 8px;
+    padding: 3px 6px;
 }}
 QLabel#section {{
     font-weight: 700;
@@ -1889,6 +1911,9 @@ QFrame#calibrationPanel, QFrame#presetCard, QFrame#workflowPanel {{
     background: {colors["calibration"]};
     border: 1px solid {colors["border"]};
     border-radius: 8px;
+}}
+QFrame#presetCard {{
+    min-height: 48px;
 }}
 QLabel#advancedLabel {{
     color: {colors["title"]};

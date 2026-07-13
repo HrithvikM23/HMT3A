@@ -67,6 +67,14 @@ MEDIAPIPE_HAND_ASSETS = (
     ("palm_detection", "palm_detection_full.tflite"),
     ("palm_detection", "palm_detection_lite.tflite"),
 )
+MEDIAPIPE_POSE_TASK_URL = (
+    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
+    "pose_landmarker_full/float16/latest/pose_landmarker_full.task"
+)
+MEDIAPIPE_HAND_TASK_URL = (
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+    "hand_landmarker/float16/latest/hand_landmarker.task"
+)
 
 
 def _download_to_path(source_url: str, destination: Path) -> None:
@@ -157,3 +165,17 @@ def ensure_mediapipe_hand_asset_files(project_root: Path) -> tuple[Path, ...]:
         if destination.exists():
             staged_paths.append(destination)
     return tuple(staged_paths)
+
+
+def ensure_mediapipe_pose_task_file(project_root: Path) -> Path:
+    destination = project_root / "models" / "body" / "pose_landmarker_full.task"
+    if not destination.exists():
+        _download_to_path(MEDIAPIPE_POSE_TASK_URL, destination)
+    return destination
+
+
+def ensure_mediapipe_hand_task_file(project_root: Path) -> Path:
+    destination = project_root / "models" / "hand" / "mediapipe" / "hand_landmarker.task"
+    if not destination.exists():
+        _download_to_path(MEDIAPIPE_HAND_TASK_URL, destination)
+    return destination

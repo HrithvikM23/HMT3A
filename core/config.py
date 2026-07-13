@@ -21,6 +21,9 @@ class PipelineConfig:
     body_model_variant: str = "yolo11x-pose.pt"
     mediapipe_pose_model: str = "pose_landmark_full.tflite"
     mediapipe_pose_model_path: Path | None = None
+    mediapipe_pose_task_path: Path | None = None
+    mediapipe_hand_task_path: Path | None = None
+    mediapipe_delegate: str = "cpu"
     hand_model_variant: str = "max"
     video_path: int | Path = 0
     output_path: Path | None = None
@@ -129,6 +132,12 @@ class PipelineConfig:
 
         if self.mediapipe_pose_model_path is not None:
             self.mediapipe_pose_model_path = Path(self.mediapipe_pose_model_path)
+
+        if self.mediapipe_pose_task_path is not None:
+            self.mediapipe_pose_task_path = Path(self.mediapipe_pose_task_path)
+
+        if self.mediapipe_hand_task_path is not None:
+            self.mediapipe_hand_task_path = Path(self.mediapipe_hand_task_path)
 
         if self.output_directory is None:
             output_directory = self.project_root / "outputs"
