@@ -8,6 +8,7 @@ from typing import Any
 
 from core.config import PipelineConfig
 from core.runtime_report import build_runtime_report
+from utils.privacy import public_path
 
 
 def _git_revision(project_root: Path) -> str | None:
@@ -45,7 +46,7 @@ def build_run_metadata(
         "mode": mode,
         "fps": fps,
         "frame_count": frame_count,
-        "source": str(config.video_path),
+        "source": public_path(config.video_path, project_root=config.project_root),
         "profile": config.profile,
         "runtime": build_runtime_report(config),
         "configuration": {
@@ -62,14 +63,14 @@ def build_run_metadata(
             "body_conf_threshold": config.body_conf_threshold,
             "hand_kp_threshold": config.hand_kp_threshold,
             "identity_hints": {key: list(value) for key, value in config.identity_hints.items()},
-            "camera_calibration_path": _path_value(config.camera_calibration_path),
-            "calibration_3d_path": _path_value(config.calibration_3d_path),
+            "camera_calibration_path": public_path(_path_value(config.camera_calibration_path), project_root=config.project_root),
+            "calibration_3d_path": public_path(_path_value(config.calibration_3d_path), project_root=config.project_root),
         },
         "outputs": {
-            "rendered": str(config.rendered_output_path),
-            "json": str(config.json_output_path),
-            "fbx": str(config.fbx_output_path),
-            "metadata": str(config.metadata_output_path),
+            "rendered": public_path(config.rendered_output_path, project_root=config.project_root),
+            "json": public_path(config.json_output_path, project_root=config.project_root),
+            "fbx": public_path(config.fbx_output_path, project_root=config.project_root),
+            "metadata": public_path(config.metadata_output_path, project_root=config.project_root),
         },
     }
     if extra:

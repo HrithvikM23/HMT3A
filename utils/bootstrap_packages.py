@@ -18,13 +18,6 @@ from utils.logging import safe_print
 
 PRUNED_VENDOR_DISTRIBUTIONS = ("openxlab",)
 WINDOWS_CONTROL_C_EXIT = 0xC000013A
-PYTORCH_CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu128"
-PYTORCH_ROCM_INDEX_URL = "https://download.pytorch.org/whl/rocm6.3"
-PYTORCH_CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
-PYTORCH_CUDA_MARKER = "__kinara_pytorch_cuda__"
-PYTORCH_ROCM_MARKER = "__kinara_pytorch_rocm__"
-PYTORCH_CPU_MARKER = "__kinara_pytorch_cpu__"
-PYTORCH_PACKAGES = ("torch", "torchvision")
 
 
 def _returncode_text(return_code: int) -> str:
@@ -159,25 +152,6 @@ def distribution_version(distribution_name: str) -> str | None:
         return None
 
 
-def cuda_runtime_detected(report: RuntimeReport) -> bool:
-    return report.nvidia_driver_detected and bool(report.cuda_bin_dirs)
-
-
-def rocm_runtime_detected(report: RuntimeReport) -> bool:
-    return report.amd_driver_detected and bool(report.rocm_bin_dirs)
-
-
-def torch_cuda_available() -> bool:
-    try:
-        import torch
-    except Exception:
-        return False
-    try:
-        return bool(torch.cuda.is_available())
-    except Exception:
-        return False
-
-
 def protobuf_needs_mediapipe_pin() -> bool:
     version = distribution_version("protobuf")
     if version is None:
@@ -254,46 +228,20 @@ def module_group_status(module_names: tuple[str, ...]) -> list[ModuleStatus]:
 def choose_onnxruntime_distribution(report: RuntimeReport) -> str:
     if distribution_installed("onnxruntime-gpu"):
         return "onnxruntime-gpu"
-    if cuda_runtime_detected(report):
+    if report.nvidia_driver_detected and report.cuda_bin_dirs and report.cudnn_bin_dirs:
         return "onnxruntime-gpu"
     if distribution_installed("onnxruntime"):
         return "onnxruntime"
     return "onnxruntime"
 
 
-def choose_pytorch_marker(report: RuntimeReport) -> str:
-    if cuda_runtime_detected(report):
-        return PYTORCH_CUDA_MARKER
-    if rocm_runtime_detected(report):
-        return PYTORCH_ROCM_MARKER
-    return PYTORCH_CPU_MARKER
-
-
 def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeReport) -> list[str]:
     missing_modules = {status.module_name for status in module_statuses if not status.ok}
-    requested_modules = {status.module_name for status in module_statuses}
     packages_to_install: list[str] = []
-    gpu_runtime_detected = cuda_runtime_detected(report)
-    amd_runtime_detected = rocm_runtime_detected(report)
+    gpu_runtime_detected = report.nvidia_driver_detected and report.cuda_bin_dirs and report.cudnn_bin_dirs
     mediapipe_requested = "mediapipe" in missing_modules
 
-    yolo_requested = bool({"ultralytics", "torch", "torchvision"} & requested_modules)
-    torch_needs_cuda_repair = (
-        yolo_requested
-        and gpu_runtime_detected
-        and not {"torch", "torchvision"} & missing_modules
-        and not torch_cuda_available()
-    )
-    torch_needs_rocm_repair = (
-        yolo_requested
-        and not gpu_runtime_detected
-        and amd_runtime_detected
-        and not {"torch", "torchvision"} & missing_modules
-        and not torch_cuda_available()
-    )
-    if {"ultralytics", "torch", "torchvision"} & missing_modules or torch_needs_cuda_repair or torch_needs_rocm_repair:
-        packages_to_install.append(choose_pytorch_marker(report))
-        packages_to_install.extend(PYTORCH_PACKAGES)
+    if {"ultralytics", "torch", "torchvision"} & missing_modules:
         packages_to_install.append("ultralytics")
         missing_modules.difference_update({"ultralytics", "torch", "torchvision", "numpy", "cv2"})
 
@@ -311,20 +259,11 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
         packages_to_install.append("numpy")
         missing_modules.discard("numpy")
 
-    onnxruntime_requested = any(status.module_name == "onnxruntime" for status in module_statuses)
     if "onnxruntime" in missing_modules:
-        packages_to_install.extend([
-            choose_onnxruntime_distribution(report),
-            "numpy>=1.26,<2.0",
-            "protobuf>=4.25.3,<5",
-        ])
+        packages_to_install.append(choose_onnxruntime_distribution(report))
         missing_modules.discard("onnxruntime")
-    elif onnxruntime_requested and gpu_runtime_detected and not distribution_installed("onnxruntime-gpu"):
-        packages_to_install.extend([
-            "onnxruntime-gpu",
-            "numpy>=1.26,<2.0",
-            "protobuf>=4.25.3,<5",
-        ])
+    elif gpu_runtime_detected and not distribution_installed("onnxruntime-gpu"):
+        packages_to_install.append("onnxruntime-gpu")
 
     if "mediapipe" in missing_modules:
         packages_to_install.extend([
@@ -341,10 +280,9 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
 
     if "rtmlib" in missing_modules:
         packages_to_install.extend([
-            "rtmlib",
             "numpy>=1.26,<2.0",
             "opencv-contrib-python>=4.9,<4.12",
-            "opencv-python>=4.9,<4.12",
+            "rtmlib",
             "protobuf>=4.25.3,<5",
         ])
         missing_modules.discard("rtmlib")
@@ -405,8 +343,16 @@ def run_logged_subprocess(command: list[str], *, env: dict[str, str], timeout: i
         raise subprocess.CalledProcessError(return_code, command)
 
 
-def _base_pip_command(python: str) -> list[str]:
-    return [
+def install_packages(packages: list[str]) -> None:
+    if not packages:
+        return
+
+    ensure_pip()
+    prune_vendor_distributions()
+    if any(package.startswith(("opencv-contrib-python", "mediapipe")) for package in packages):
+        prune_opencv_distributions_for_contrib()
+    python = installer_python()
+    command = [
         python,
         "-m",
         "pip",
@@ -424,65 +370,13 @@ def _base_pip_command(python: str) -> list[str]:
         "60",
         "--target",
         str(VENDOR_DIR),
-    ]
-
-
-def _install_pytorch_packages(packages: list[str], *, accelerator: str, python: str, env: dict[str, str]) -> None:
-    if not packages:
-        return
-    if accelerator == "cuda":
-        label = "CUDA"
-        index_url = os.environ.get("KINARA_PYTORCH_CUDA_INDEX_URL", PYTORCH_CUDA_INDEX_URL)
-    elif accelerator == "rocm":
-        label = "ROCm"
-        index_url = os.environ.get("KINARA_PYTORCH_ROCM_INDEX_URL", PYTORCH_ROCM_INDEX_URL)
-    else:
-        label = "CPU"
-        index_url = os.environ.get("KINARA_PYTORCH_CPU_INDEX_URL", PYTORCH_CPU_INDEX_URL)
-    safe_print(f"Installing PyTorch {label} wheels from {index_url}")
-    command = [
-        *_base_pip_command(python),
-        "--index-url",
-        index_url,
         *packages,
     ]
-    run_logged_subprocess(command, env=env)
-
-
-def install_packages(packages: list[str]) -> None:
-    if not packages:
-        return
-
-    ensure_pip()
-    prune_vendor_distributions()
-    if any(package.startswith(("opencv-contrib-python", "mediapipe")) for package in packages):
-        prune_opencv_distributions_for_contrib()
-    python = installer_python()
     env = os.environ.copy()
     env["PYTHONNOUSERSITE"] = "1"
     prepend_pythonpath(VENDOR_DIR)
     env["PYTHONPATH"] = os.environ.get("PYTHONPATH", "")
-
-    cuda_marker = PYTORCH_CUDA_MARKER in packages
-    rocm_marker = PYTORCH_ROCM_MARKER in packages
-    cpu_marker = PYTORCH_CPU_MARKER in packages
-    packages = [package for package in packages if package not in {PYTORCH_CUDA_MARKER, PYTORCH_ROCM_MARKER, PYTORCH_CPU_MARKER}]
-    pytorch_packages = [package for package in packages if package in PYTORCH_PACKAGES]
-    remaining_packages = [package for package in packages if package not in PYTORCH_PACKAGES]
-
-    if cuda_marker or rocm_marker or cpu_marker:
-        accelerator = "cuda" if cuda_marker else "rocm" if rocm_marker else "cpu"
-        _install_pytorch_packages(pytorch_packages, accelerator=accelerator, python=python, env=env)
-    else:
-        remaining_packages = [*pytorch_packages, *remaining_packages]
-
-    if remaining_packages:
-        command = [
-            *_base_pip_command(python),
-            *remaining_packages,
-        ]
-        run_logged_subprocess(command, env=env)
-
+    run_logged_subprocess(command, env=env)
     importlib.invalidate_caches()
     prepend_sys_path(VENDOR_DIR)
 
@@ -520,17 +414,6 @@ def probe_runtime(report: RuntimeReport, module_names: tuple[str, ...] | None = 
                 )
         except Exception as exc:
             warnings.append(f"Could not inspect PyTorch CUDA status: {type(exc).__name__}: {exc}")
-    if report.amd_driver_detected and not report.nvidia_driver_detected and torch_status is not None and torch_status.ok:
-        try:
-            import torch
-
-            if not torch.cuda.is_available():
-                warnings.append(
-                    "AMD ROCm/HIP runtime is installed but PyTorch did not report GPU availability; "
-                    "YOLO body inference will run on CPU unless ROCm PyTorch is installed and supports this GPU."
-                )
-        except Exception as exc:
-            warnings.append(f"Could not inspect PyTorch ROCm status: {type(exc).__name__}: {exc}")
 
     return statuses, warnings
 

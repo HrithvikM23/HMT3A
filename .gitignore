@@ -28,9 +28,9 @@ venv/
 # Logs & runtime outputs
 # ----------------------
 logs/
-test/
 outputs/
 test_outputs/
+models/
 .kinara_runtime/
 .kinara_runtime*/
 .kinara_logs/
@@ -64,7 +64,6 @@ opencv_current_charuco_*.png
 *.tflite
 *.binarypb
 *.task
-
 # ----------------------
 # OS / Editor junk
 # ----------------------

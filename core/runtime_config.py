@@ -19,9 +19,7 @@ from utils.model_assets import (
     HAND_MODEL_SPECS,
     ensure_body_model_file,
     ensure_mediapipe_hand_asset_files,
-    ensure_mediapipe_hand_task_file,
     ensure_mediapipe_pose_model_file,
-    ensure_mediapipe_pose_task_file,
     ensure_model_file,
 )
 
@@ -50,12 +48,8 @@ def prepare_model_assets(config: PipelineConfig) -> None:
                 config.project_root,
                 config.mediapipe_pose_model,
             )
-            if config.mediapipe_delegate == "gpu":
-                config.mediapipe_pose_task_path = ensure_mediapipe_pose_task_file(config.project_root)
         if config.hand_backend == "mediapipe" or config.enable_backend_fallbacks:
             ensure_mediapipe_hand_asset_files(config.project_root)
-            if config.mediapipe_delegate == "gpu":
-                config.mediapipe_hand_task_path = ensure_mediapipe_hand_task_file(config.project_root)
 
     if needs_yolo_body(config.body_backend, config.enable_backend_fallbacks) and config.body_model_path is None:
         config.body_model_path = config.body_model_variant or DEFAULT_BODY_MODEL
@@ -125,9 +119,6 @@ def validate_config(config: PipelineConfig) -> bool:
         accepted = ", ".join(mediapipe_pose_model_names())
         print(f"Error: invalid MediaPipe pose model: {config.mediapipe_pose_model}. Accepted values: {accepted}")
         return False
-    if config.mediapipe_delegate not in {"cpu", "gpu"}:
-        print(f"Error: invalid MediaPipe delegate: {config.mediapipe_delegate}")
-        return False
     if config.rtmpose_mode not in {"lightweight", "balanced", "performance"}:
         print(f"Error: invalid RTMPose mode: {config.rtmpose_mode}")
         return False
@@ -135,13 +126,7 @@ def validate_config(config: PipelineConfig) -> bool:
         print(f"Error: invalid RTMPose backend: {config.rtmpose_backend}")
         return False
     missing_paths = [
-        path
-        for path in (
-            config.hand_model_path,
-            config.mediapipe_pose_model_path,
-            config.mediapipe_pose_task_path,
-            config.mediapipe_hand_task_path,
-        )
+        path for path in (config.hand_model_path, config.mediapipe_pose_model_path)
         if path is not None and not Path(path).exists()
     ]
     if missing_paths:
@@ -349,7 +334,6 @@ def _build_pipeline_config(
         hand_model_path=args.hand_model,
         body_model_variant=body_model_variant,
         mediapipe_pose_model=mediapipe_pose_model,
-        mediapipe_delegate=args.mediapipe_delegate,
         hand_model_variant=args.hand_model_variant,
         hand_input_name=args.hand_input_name,
         hand_input_dtype="float32",

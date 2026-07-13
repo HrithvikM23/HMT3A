@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,9 +7,9 @@ from pathlib import Path
 from utils.logging import safe_print
 
 PROJECT_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
-RUNTIME_ROOT = Path(os.environ.get("KINARA_RUNTIME_ROOT", "") or PROJECT_ROOT).resolve()
-VENDOR_DIR = RUNTIME_ROOT / f".vendor_py{sys.version_info.major}{sys.version_info.minor}"
-ULTRALYTICS_CONFIG_DIR = RUNTIME_ROOT / ".ultralytics"
+VENDOR_DIR = PROJECT_ROOT / f".vendor_py{sys.version_info.major}{sys.version_info.minor}"
+ULTRALYTICS_CONFIG_DIR = PROJECT_ROOT / ".ultralytics"
+RUNTIME_CACHE_DIR = PROJECT_ROOT / ".kinara_runtime" / "cache"
 
 REQUIRED_PROJECT_FILES = (
     Path("app") / "main.py",
@@ -80,13 +79,10 @@ class ModuleStatus:
 @dataclass(slots=True)
 class RuntimeReport:
     nvidia_driver_detected: bool = False
-    amd_driver_detected: bool = False
     cuda_bin_dirs: list[Path] = field(default_factory=list)
     cudnn_bin_dirs: list[Path] = field(default_factory=list)
-    rocm_bin_dirs: list[Path] = field(default_factory=list)
     cuda_include_dirs: list[Path] = field(default_factory=list)
     cudnn_include_dirs: list[Path] = field(default_factory=list)
-    rocm_include_dirs: list[Path] = field(default_factory=list)
     path_updates: list[Path] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 

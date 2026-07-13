@@ -14,9 +14,11 @@ from core.config_file import config_preparser, load_config_defaults
 from core.runtime_config import build_config_for_assignment, build_fused_config, prepare_runtime_config
 from core.runtime_profiles import apply_runtime_profile
 from utils.bootstrap_dependencies import ensure_runtime_ready
+from utils.bootstrap_paths import ensure_local_environment
 from utils.logging import configure_run_log, install_safe_stdio, log_error, log_info, safe_print
 
 install_safe_stdio()
+ensure_local_environment()
 
 
 def _checked_config(builder, *args, **kwargs):

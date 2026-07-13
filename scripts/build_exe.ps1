@@ -113,30 +113,6 @@ try {
     if (Test-Path -LiteralPath $AssetsRoot) {
         $PyInstallerArgs += @('--add-data', "$AssetsRoot;assets")
     }
-    $ProjectMetadataFiles = @('pyproject.toml')
-    foreach ($relativeFile in $ProjectMetadataFiles) {
-        $sourceFile = Join-Path $ProjectRoot $relativeFile
-        if (Test-Path -LiteralPath $sourceFile -PathType Leaf) {
-            $PyInstallerArgs += @('--add-data', "$sourceFile;.")
-        }
-    }
-    $SourceDataDirs = @(
-        'app',
-        'camera',
-        'core',
-        'inference',
-        'kinara',
-        'network',
-        'pipeline',
-        'runners',
-        'utils'
-    )
-    foreach ($relativeDir in $SourceDataDirs) {
-        $sourceDir = Join-Path $ProjectRoot $relativeDir
-        if (Test-Path -LiteralPath $sourceDir -PathType Container) {
-            $PyInstallerArgs += @('--add-data', "$sourceDir;$relativeDir")
-        }
-    }
     $IconPath = Join-Path $ProjectRoot 'assets\kinara.ico'
     if (Test-Path -LiteralPath $IconPath) {
         $PyInstallerArgs += @('--icon', "$IconPath")
