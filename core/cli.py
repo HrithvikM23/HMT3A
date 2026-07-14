@@ -201,6 +201,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stop after N processed frames and print run timing. 0 processes the full source.",
     )
     parser.add_argument(
+        "--parallel-workers",
+        type=int,
+        default=0,
+        help=(
+            "Worker process count for offline chunk processing. 0 chooses automatically, 1 disables "
+            "chunk parallelism, values above 1 force that many workers when the workflow is eligible."
+        ),
+    )
+    parser.add_argument(
+        "--parallel-chunk-seconds",
+        type=float,
+        default=5.0,
+        help="Seconds per offline processing chunk. 0 chooses automatically.",
+    )
+    parser.add_argument(
+        "--parallel-overlap-seconds",
+        type=float,
+        default=0.5,
+        help="Warm-up overlap before each chunk to reduce smoothing resets. 0 chooses automatically.",
+    )
+    parser.add_argument(
         "--yolo-fast-preset",
         choices=("nano", "small", "medium", "large", "xlarge"),
         help="Convenience preset for legacy YOLO pose model size. Explicit --model still wins.",

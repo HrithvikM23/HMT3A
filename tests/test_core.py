@@ -397,6 +397,17 @@ class CoreLogicTests(unittest.TestCase):
         self.assertIn("mediapipe==0.10.21", plan)
         self.assertEqual(plan.count("opencv-contrib-python>=4.9,<4.12"), 1)
 
+    def test_plain_cv2_install_plan_uses_bounded_opencv_and_numpy(self) -> None:
+        from utils.bootstrap_packages import resolve_install_plan
+        from utils.bootstrap_state import ModuleStatus, RuntimeReport
+
+        plan = resolve_install_plan([ModuleStatus("cv2", False), ModuleStatus("numpy", False)], RuntimeReport())
+
+        self.assertIn("numpy>=1.26,<2.0", plan)
+        self.assertIn("opencv-python>=4.9,<4.12", plan)
+        self.assertNotIn("opencv-python", plan)
+        self.assertNotIn("numpy", plan)
+
     def test_rtmlib_install_plan_pins_numpy_and_opencv(self) -> None:
         from utils.bootstrap_packages import resolve_install_plan
         from utils.bootstrap_state import ModuleStatus, RuntimeReport
@@ -505,6 +516,44 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(config.hand_detect_interval, 3)
         self.assertEqual(config.hand_crop_retries, 1)
         self.assertEqual(config.fps_log_interval, 0.5)
+
+    def test_cli_parallel_knobs_build_config(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "--source", "0",
+            "--parallel-workers", "0",
+            "--parallel-chunk-seconds", "0",
+            "--parallel-overlap-seconds", "0",
+        ])
+        config = build_config_for_assignment(args, InputAssignment("CAM_0", 0), False)
+
+        self.assertEqual(config.parallel_workers, 0)
+        self.assertEqual(config.parallel_chunk_seconds, 0.0)
+        self.assertEqual(config.parallel_overlap_seconds, 0.0)
+
+    def test_parallel_auto_resolves_single_worker_for_short_sources(self) -> None:
+        from runners.parallel_single import resolve_parallel_workers
+
+        config = PipelineConfig(parallel_workers=0)
+
+        self.assertEqual(resolve_parallel_workers(config, total_frames=30, fps=30.0), 1)
+
+    def test_parallel_chunk_specs_include_warmup_overlap(self) -> None:
+        from runners.parallel_single import build_chunk_specs
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = PipelineConfig(
+                output_directory=Path(tmp_dir),
+                parallel_chunk_seconds=5.0,
+                parallel_overlap_seconds=0.5,
+            )
+            specs = build_chunk_specs(config, total_frames=360, fps=30.0, chunk_root=Path(tmp_dir))
+
+        self.assertEqual(len(specs), 3)
+        self.assertEqual(specs[0].start_frame, 0)
+        self.assertEqual(specs[0].warmup_start_frame, 0)
+        self.assertEqual(specs[1].start_frame, 150)
+        self.assertEqual(specs[1].warmup_start_frame, 135)
 
     def test_cli_single_camera_depth_mode_build_config(self) -> None:
         parser = build_parser()

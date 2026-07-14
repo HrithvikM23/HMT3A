@@ -232,6 +232,15 @@ def validate_config(config: PipelineConfig) -> bool:
     if config.benchmark_frames < 0:
         print(f"Error: benchmark_frames must be zero or greater: {config.benchmark_frames}")
         return False
+    if config.parallel_workers < 0:
+        print(f"Error: parallel_workers must be zero or greater: {config.parallel_workers}")
+        return False
+    if config.parallel_chunk_seconds < 0:
+        print(f"Error: parallel_chunk_seconds must be zero or greater: {config.parallel_chunk_seconds}")
+        return False
+    if config.parallel_overlap_seconds < 0:
+        print(f"Error: parallel_overlap_seconds must be zero or greater: {config.parallel_overlap_seconds}")
+        return False
     if config.export_cleanup_max_velocity <= 0:
         print(f"Error: export_cleanup_max_velocity must be positive: {config.export_cleanup_max_velocity}")
         return False
@@ -413,6 +422,9 @@ def _build_pipeline_config(
         fps_log_interval=args.fps_log_interval,
         fps_overlay_enabled=not args.no_fps_overlay,
         benchmark_frames=args.benchmark_frames,
+        parallel_workers=args.parallel_workers,
+        parallel_chunk_seconds=args.parallel_chunk_seconds,
+        parallel_overlap_seconds=args.parallel_overlap_seconds,
         identity_hints=identity_hint_map,
     )
 

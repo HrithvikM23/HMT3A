@@ -251,12 +251,15 @@ def resolve_install_plan(module_statuses: list[ModuleStatus], report: RuntimeRep
         if calibration_requested or mediapipe_requested:
             packages_to_install.append("opencv-contrib-python>=4.9,<4.12")
         else:
-            packages_to_install.append("opencv-python")
+            packages_to_install.extend([
+                "numpy>=1.26,<2.0",
+                "opencv-python>=4.9,<4.12",
+            ])
         missing_modules.discard("cv2")
         missing_modules.discard("numpy")
 
     if "numpy" in missing_modules:
-        packages_to_install.append("numpy")
+        packages_to_install.append("numpy>=1.26,<2.0")
         missing_modules.discard("numpy")
 
     if "onnxruntime" in missing_modules:

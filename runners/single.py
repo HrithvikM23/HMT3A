@@ -12,6 +12,7 @@ from network.osc_sender import OSCSender
 from pipeline.pipeline import PoseHandPipeline
 from runners.common import export_motion_bundle, print_saved_paths
 from runners.multi_person import run_multi_person_assignment
+from runners.parallel_single import run_parallel_assignment
 from utils.exports import build_joint_map
 from utils.fps import FpsMeter, draw_fps_overlay
 from utils.logging import log_info
@@ -25,6 +26,8 @@ def run_assignment(config: PipelineConfig) -> bool:
         return run_multi_person_assignment(config)
     if not prepare_runtime_config(config):
         return False
+    if run_parallel_assignment(config):
+        return True
 
     assert config.output_path is not None
     session = VideoCaptureSession(

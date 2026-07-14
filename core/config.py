@@ -90,6 +90,9 @@ class PipelineConfig:
     fps_log_interval: float = 0.0
     fps_overlay_enabled: bool = True
     benchmark_frames: int = 0
+    parallel_workers: int = 0
+    parallel_chunk_seconds: float = 5.0
+    parallel_overlap_seconds: float = 0.5
     enable_preview: bool = True
     provider_names: tuple[str, ...] = ("CUDAExecutionProvider",)
     preview_window_title: str = "Pose + Hand Landmarks"
