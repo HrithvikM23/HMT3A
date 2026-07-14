@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 
-REDACTED_PATH = "<REDACTED_PATH>"
-HOME_PLACEHOLDER = "<HOME>"
 PROJECT_PLACEHOLDER = "<PROJECT_ROOT>"
 
 
@@ -32,21 +29,6 @@ def public_path(value: Path | str | int | None, *, project_root: Path | None = N
             pass
         else:
             return str(Path(PROJECT_PLACEHOLDER) / relative).replace("\\", "/")
-
-    home = Path.home()
-    try:
-        relative_home = _normalized(path).relative_to(_normalized(home))
-    except (OSError, ValueError):
-        relative_home = None
-    if relative_home is not None:
-        parts = relative_home.parts
-        if parts and parts[0].lower() in {"downloads", "desktop", "documents", "onedrive"}:
-            return str(Path(HOME_PLACEHOLDER) / parts[0] / "<FILE>").replace("\\", "/")
-        return str(Path(HOME_PLACEHOLDER) / relative_home).replace("\\", "/")
-
-    drive, _ = os.path.splitdrive(text)
-    if drive:
-        return REDACTED_PATH
 
     return text.replace("\\", "/")
 

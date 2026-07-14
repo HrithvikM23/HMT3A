@@ -312,7 +312,6 @@ Build/runtime notes:
 
 - Set `KINARA_BUILD_PYTHON` or `KINARA_PYTHON` only when you need to force a specific Python 3.11 runtime.
 - Keep runtime dependencies, downloaded models, caches, logs, and rendered outputs out of git. The project ignores `models/`, `.vendor_py*/`, `.kinara_runtime/`, `.kinara_logs/`, `outputs/`, and `artifacts/`.
-- The app stores RTMPose and Ultralytics cache data in project-local ignored folders so logs and generated files do not need to expose private home-directory paths.
 - The EXE is distributed as a folder, not as a single standalone file. Keep `Kinara.exe` with its `_internal` folder and any runtime folders created by Check Runtime.
 
 Double-clicking `Kinara.exe` opens a native Windows desktop launcher instead of requiring terminal input. The UI uses a resizable control-deck layout: the preview/log area and the right control panel can be resized with splitter handles, with minimum and maximum constraints so the app cannot be crushed into an unusable shape.
@@ -362,47 +361,9 @@ RTMPose downloads are cached under:
 
 This folder is ignored by git.
 
----
-
-# Privacy-Safe Development
-
-Kinara is intended to be safe to publish on a public GitHub repository.
-
-Do not commit:
-
-```txt
-local drive paths
-usernames
-Downloads/Desktop/Documents paths
-personal video filenames
-API keys or tokens
-logs, outputs, runtime caches, model weights, or built app folders
-```
-
-Use placeholders in docs and examples:
-
-```txt
-<PROJECT_ROOT>
-<VIDEO_PATH>
-<MODEL_DIR>
-<HOME>/Downloads/<FILE>
-```
-
-Runtime metadata redacts private absolute paths. Paths inside the repo are written relative to `<PROJECT_ROOT>`, and files selected from private user folders are written as placeholders instead of exact filenames.
-
-Before publishing, run a privacy scan from the repo root:
-
-```bash
-rg -n "<your privacy and secret patterns>"
-```
-
-Known safe matches include generic Windows install locations such as `C:\Program Files\...`, public repository URLs, license author text, and FBX connection lines containing `C:`.
-
----
-
 # Smoke Testing Models
 
-Use a neutral output basename when testing private videos so the source filename does not become an output filename:
+Use a neutral output basename when testing local videos so the source filename does not become an output filename:
 
 ```bash
 py -3.11 -m kinara --source "<VIDEO_PATH>" --no-preview --benchmark-frames 3 --output-dir ".tmp_test_runtime/video_matrix" --output-basename "mediapipe_full" --landmark-backend mediapipe --model pose_landmark_full.tflite

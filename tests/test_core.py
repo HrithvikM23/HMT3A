@@ -157,45 +157,48 @@ class CoreLogicTests(unittest.TestCase):
         self.assertTrue(config.metadata_output_path.name.startswith("metadata_test metadata-"))
         self.assertTrue(config.metadata_output_path.name.endswith(".json"))
 
-    def test_runtime_report_redacts_private_absolute_paths(self) -> None:
+    def test_runtime_report_relativizes_project_paths(self) -> None:
         from core.runtime_report import build_runtime_report
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             project_root = Path(tmp_dir) / "Kinara"
             project_root.mkdir()
+            source_path = Path.home() / "Downloads" / "local_clip.mp4"
             config = PipelineConfig(
                 project_root=project_root,
-                video_path=Path.home() / "Downloads" / "private_clip.mp4",
+                video_path=source_path,
                 output_directory=project_root / "outputs",
-                output_basename="privacy",
+                output_basename="local",
             )
 
             report = build_runtime_report(config)
 
         report_text = json.dumps(report)
-        self.assertNotIn(str(Path.home()), report_text)
-        self.assertNotIn("private_clip.mp4", report_text)
+        self.assertEqual(report["outputs"]["metadata"].split("/")[0], "<PROJECT_ROOT>")
         self.assertIn("<PROJECT_ROOT>", report_text)
+        self.assertNotIn(str(project_root), report_text)
 
-    def test_run_metadata_redacts_private_source_path(self) -> None:
+    def test_run_metadata_keeps_local_source_path(self) -> None:
         from utils.run_metadata import build_run_metadata
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             project_root = Path(tmp_dir) / "Kinara"
             project_root.mkdir()
+            source_path = Path.home() / "Downloads" / "local_clip.mp4"
             config = PipelineConfig(
                 project_root=project_root,
-                video_path=Path.home() / "Downloads" / "private_clip.mp4",
+                video_path=source_path,
                 output_directory=project_root / "outputs",
-                output_basename="privacy",
+                output_basename="local",
             )
 
             metadata = build_run_metadata(config, mode="test", fps=30.0, frame_count=1)
 
         metadata_text = json.dumps(metadata)
-        self.assertNotIn(str(Path.home()), metadata_text)
-        self.assertNotIn("private_clip.mp4", metadata_text)
-        self.assertEqual(metadata["source"], "<HOME>/Downloads/<FILE>")
+        self.assertEqual(metadata["source"], str(source_path).replace("\\", "/"))
+        self.assertIn("local_clip.mp4", metadata_text)
+        self.assertIn("<PROJECT_ROOT>", metadata_text)
+        self.assertNotIn(str(project_root), metadata_text)
 
     def test_installer_python_does_not_default_to_blender_python(self) -> None:
         import utils.bootstrap_packages as bootstrap_packages

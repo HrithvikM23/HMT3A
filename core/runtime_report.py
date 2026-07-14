@@ -6,7 +6,7 @@ from pathlib import Path
 
 from core.backend_selection import needs_mediapipe, needs_onnx_hand, needs_rtmpose_body, needs_yolo_body
 from core.config import PipelineConfig
-from utils.privacy import public_path
+from utils.public_paths import public_path
 
 
 def _module_available(module_name: str) -> bool:

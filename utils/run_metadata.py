@@ -8,7 +8,7 @@ from typing import Any
 
 from core.config import PipelineConfig
 from core.runtime_report import build_runtime_report
-from utils.privacy import public_path
+from utils.public_paths import public_path
 
 
 def _git_revision(project_root: Path) -> str | None:
