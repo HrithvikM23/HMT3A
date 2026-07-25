@@ -40,6 +40,17 @@ def hand_motion_delta(
     return (wrist_dx * 0.75) + (elbow_dx * 0.25), (wrist_dy * 0.75) + (elbow_dy * 0.25)
 
 
+def acceleration_aware_delta(
+    current_delta: tuple[float, float],
+    previous_delta: tuple[float, float] | None,
+) -> tuple[float, float]:
+    if previous_delta is None:
+        return current_delta
+    accel_x = current_delta[0] - previous_delta[0]
+    accel_y = current_delta[1] - previous_delta[1]
+    return current_delta[0] + accel_x * 0.5, current_delta[1] + accel_y * 0.5
+
+
 def predict_hand_payload(
     previous_payload: dict | None,
     previous_wrist: Point | None,
@@ -47,11 +58,13 @@ def predict_hand_payload(
     confidence_decay: float,
     previous_elbow: Point | None = None,
     elbow_point: Point | None = None,
+    previous_delta: tuple[float, float] | None = None,
 ):
     if previous_payload is None or previous_wrist is None:
         return None
 
-    offset_x, offset_y = hand_motion_delta(previous_wrist, wrist_point, previous_elbow, elbow_point)
+    current_delta = hand_motion_delta(previous_wrist, wrist_point, previous_elbow, elbow_point)
+    offset_x, offset_y = acceleration_aware_delta(current_delta, previous_delta)
     depths = previous_payload.get("depths")
     return (
         translate_box(previous_payload["box"], offset_x, offset_y),

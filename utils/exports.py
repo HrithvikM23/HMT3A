@@ -169,7 +169,7 @@ def _apply_single_view_hand_depths(
 
 
 def _should_add_single_view_depths(joint_depths: dict[str, float]) -> bool:
-    return False
+    return bool(joint_depths)
 
 
 def _resolve_joint_depths(

@@ -414,13 +414,18 @@ def _run_fused_multi_person_frame(
             person_key,
             PoseHandPipeline(config, runner, LandmarkSmoother(config), OSCSender(enabled=False)),
         )
-        fused_body = fuse_body_views(camera_bodies, config.body_conf_threshold, reference_label=reference_label)
+        fused_body = fuse_body_views(
+            camera_bodies,
+            config.body_conf_threshold,
+            reference_label=reference_label,
+            calibrations=calibrations,
+        )
         if fused_body is not None:
             fused_body = renderer.smoother.smooth_body(fused_body)
         if fused_body is None:
             continue
 
-        fused_hands = fuse_smoothed_hands(renderer, camera_hands, config, reference_label)
+        fused_hands = fuse_smoothed_hands(renderer, camera_hands, config, reference_label, calibrations=calibrations)
         renderer.render_pose(canvas, fused_body, fused_hands, send_osc=False)
 
         label = next((track.label for track in views.values() if track.label), person_key)
@@ -510,13 +515,18 @@ def _run_fused_single_frame(
         "single",
         PoseHandPipeline(config, runner, LandmarkSmoother(config), OSCSender(enabled=False)),
     )
-    fused_body = fuse_body_views(camera_bodies, config.body_conf_threshold, reference_label=reference_label)
+    fused_body = fuse_body_views(
+        camera_bodies,
+        config.body_conf_threshold,
+        reference_label=reference_label,
+        calibrations=calibrations,
+    )
     if fused_body is not None:
         fused_body = renderer.smoother.smooth_body(fused_body)
     if fused_body is None:
         fused_body = [(0, 0, 0.0) for _ in range(17)]
 
-    fused_hands = fuse_smoothed_hands(renderer, camera_hands, config, reference_label)
+    fused_hands = fuse_smoothed_hands(renderer, camera_hands, config, reference_label, calibrations=calibrations)
     joint_depths = estimate_joint_depths(
         camera_bodies=camera_bodies,
         camera_hands=camera_hands,

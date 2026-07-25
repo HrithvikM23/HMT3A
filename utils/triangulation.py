@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import importlib
 import json
 import math
 from dataclasses import dataclass
@@ -228,10 +227,10 @@ def _csv_float(value: float) -> str:
 
 def _load_camera_group_class():
     try:
-        module = importlib.import_module("".join(("ani", "pose", "lib.cameras")))
+        from aniposelib.cameras import CameraGroup
     except ModuleNotFoundError:
         raise
-    return module.CameraGroup
+    return CameraGroup
 
 
 def _load_camera_group(calibration_path: Path):
@@ -249,6 +248,11 @@ def _matching_camera_labels(camera_group, observation_frames: list[dict[str, Any
     matched_labels = [available_by_upper[name.upper()] for name in matched_camera_names]
     if len(matched_camera_names) == len(camera_names):
         return matched_labels
+    if not hasattr(camera_group, "subset_cameras_names"):
+        raise ValueError(
+            "Calibration file includes cameras not present in this run, and the installed calibration backend cannot "
+            "subset cameras. Re-calibrate with only the cameras used in this run, or upgrade aniposelib."
+        )
     if hasattr(camera_group, "subset_cameras_names"):
         subset_group = camera_group.subset_cameras_names(matched_camera_names)
         camera_group.cameras = subset_group.cameras
@@ -373,14 +377,11 @@ def _full_reprojection_error(
 ) -> np.ndarray | None:
     try:
         full_error = np.asarray(camera_group.reprojection_error(points_3d_flat, flat_points, mean=False))
-    except Exception:
+    except (AttributeError, NotImplementedError, TypeError):
         return None
     if full_error.ndim == 3 and full_error.shape[-1] == 2:
         full_error = np.linalg.norm(full_error, axis=2)
-    try:
-        return full_error.reshape(flat_points.shape[0], frame_count, tracked_point_count)
-    except ValueError:
-        return None
+    return full_error.reshape(flat_points.shape[0], frame_count, tracked_point_count)
 
 
 def _smooth_points_3d(points_3d: np.ndarray, confidences: np.ndarray, smoothing_alpha: float) -> np.ndarray:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import subprocess
 import sys
 from pathlib import Path
 
@@ -159,6 +160,8 @@ ADVANCED_CATEGORY_BY_DEST = {
     "hand_box_color": "Visuals",
     "hand_line_color": "Visuals",
     "hand_point_color": "Visuals",
+    "fallback_hand_color": "Visuals",
+    "debug_fallback_hands": "Visuals",
     "body_line_thickness": "Visuals",
     "body_point_radius": "Visuals",
     "hand_box_thickness": "Visuals",
@@ -191,6 +194,19 @@ CHARUCO_A3_PRESET = {
     "charuco_retry_sharpen": False,
 }
 
+CHARUCO_PAPER_PRESETS = {
+    "A3": {"charuco_squares_x": "11", "charuco_squares_y": "8", "charuco_square_size": "36"},
+    "A4": {"charuco_squares_x": "9", "charuco_squares_y": "6", "charuco_square_size": "28"},
+    "Letter": {"charuco_squares_x": "9", "charuco_squares_y": "6", "charuco_square_size": "26"},
+    "Legal": {"charuco_squares_x": "11", "charuco_squares_y": "7", "charuco_square_size": "30"},
+}
+
+MODEL_WEIGHT_VALUES = {
+    "Lite": {"hand_model_variant": "low", "hand_input_size": "512"},
+    "Full": {"hand_model_variant": "high", "hand_input_size": "640"},
+    "Heavy": {"hand_model_variant": "max", "hand_input_size": "768"},
+}
+
 CHARUCO_RESCUE_PRESET = {
     **CHARUCO_A3_PRESET,
     "charuco_detection_strictness": "lenient",
@@ -199,72 +215,133 @@ CHARUCO_RESCUE_PRESET = {
     "charuco_retry_sharpen": True,
 }
 
+BACKEND_MODEL_DESTS = (
+    "profile",
+    "landmark_backend",
+    "body_backend",
+    "hand_backend",
+    "model",
+    "body_input_size",
+    "processing_width",
+    "rtmpose_mode",
+    "rtmpose_backend",
+    "rtmpose_device",
+    "rtmpose_det_frequency",
+    "rtmpose_tracking",
+    "yolo_fast_preset",
+    "body_iou_threshold",
+    "yolo_tracker",
+    "yolo_device",
+    "yolo_half",
+    "yolo_fuse",
+    "yolo_warmup",
+    "yolo_person_class_filter",
+    "hand_model_variant",
+    "hand_model",
+    "hand_input_name",
+    "hand_input_size",
+    "hand_det_threshold",
+    "hand_kp_threshold",
+    "hand_box_min_size",
+    "hand_box_scale",
+    "hand_detect_interval",
+    "hand_crop_retries",
+)
+
 LAUNCHER_PRESETS = (
     {
-        "title": "Demo Stable",
-        "description": "Reliable defaults for a live demo on normal footage.",
-        "section": "Runtime",
+        "title": "MediaPipe",
+        "description": "Runs MediaPipe Pose and MediaPipe Hands. Lite is fastest, Full is the default, and Heavy uses the slowest pose model.",
+        "section": "Model",
         "people": 1,
         "values": {
             "profile": "fastest",
             "landmark_backend": "mediapipe",
+            "body_backend": "mediapipe",
+            "hand_backend": "mediapipe",
             "processing_width": "640",
-            "body_detect_interval": "1",
-            "hand_detect_interval": "2",
-            "hand_crop_retries": "1",
+        },
+        "option_label": "Pose model",
+        "options": ("Lite", "Full", "Heavy"),
+        "option_values": {
+            "Lite": {"model": "pose_landmark_lite.tflite"},
+            "Full": {"model": "pose_landmark_full.tflite"},
+            "Heavy": {"model": "pose_landmark_heavy.tflite"},
+        },
+        "weight_label": "Hand weight",
+        "weight_options": ("Lite", "Full", "Heavy"),
+        "weight_values": {
+            "Lite": {"hand_model_variant": "low"},
+            "Full": {"hand_model_variant": "high"},
+            "Heavy": {"hand_model_variant": "max"},
         },
     },
     {
-        "title": "Quality Export",
-        "description": "Sharper processing and smoother output for recorded clips.",
-        "section": "Model",
-        "people": 1,
-        "values": {
-            "profile": "quality",
-            "processing_width": "960",
-            "body_smoothing_alpha": "0.55",
-            "hand_smoothing_alpha": "0.55",
-            "export_cleanup": True,
-        },
-    },
-    {
-        "title": "Multi-Person",
-        "description": "Tracks two people with longer identity hold settings.",
-        "section": "Tracking",
-        "people": 2,
-        "values": {
-            "max_people": "2",
-            "person_track_hold_frames": "45",
-            "person_match_threshold": "0.35",
-            "body_hold_frames": "8",
-            "hand_hold_frames": "10",
-        },
-    },
-    {
-        "title": "RTMPose GPU",
-        "description": "Use the RTMPose path when CUDA/runtime packages are ready.",
+        "title": "RTMPose",
+        "description": "Runs RTMPose body tracking with ONNX hands. Lite is fastest, Full is normal, and Heavy is largest.",
         "section": "RTMPose",
         "people": 1,
         "values": {
             "landmark_backend": "rtmpose",
+            "body_backend": "rtmpose",
+            "hand_backend": "onnx",
             "rtmpose_device": "cuda",
-            "rtmpose_mode": "balanced",
+            "hand_model_variant": "max",
+        },
+        "option_label": "Pose mode",
+        "options": ("Lite", "Full", "Heavy"),
+        "option_values": {
+            "Lite": {"rtmpose_mode": "lightweight"},
+            "Full": {"rtmpose_mode": "balanced"},
+            "Heavy": {"rtmpose_mode": "performance"},
+        },
+        "default_option": "Full",
+        "weight_label": "Hand weight",
+        "weight_options": ("Lite", "Full", "Heavy"),
+        "weight_values": MODEL_WEIGHT_VALUES,
+    },
+    {
+        "title": "ONNX",
+        "description": "Runs the legacy Ultralytics YOLO body path with ONNX hands. Nano is fastest. X-Large is slowest and highest quality.",
+        "section": "Legacy YOLO",
+        "people": 1,
+        "values": {
+            "landmark_backend": "yolo",
+            "body_backend": "yolo",
+            "hand_backend": "onnx",
+            "hand_model_variant": "max",
+        },
+        "option_label": "YOLO model",
+        "options": ("Nano", "Small", "Medium", "Large", "X-Large"),
+        "option_values": {
+            "Nano": {"model": "yolo11n-pose.pt", "body_input_size": "640"},
+            "Small": {"model": "yolo11s-pose.pt", "body_input_size": "640"},
+            "Medium": {"model": "yolo11m-pose.pt", "body_input_size": "768"},
+            "Large": {"model": "yolo11l-pose.pt", "body_input_size": "832"},
+            "X-Large": {"model": "yolo11x-pose.pt", "body_input_size": "960"},
+        },
+        "weight_label": "Hand weight",
+        "weight_options": ("Lite", "Full", "Heavy"),
+        "weight_values": MODEL_WEIGHT_VALUES,
+    },
+    {
+        "title": "RTMPose WholeBody",
+        "description": "Runs one whole-body model for body and both hands. Balanced is the default mode.",
+        "section": "RTMPose",
+        "people": 1,
+        "values": {
+            "landmark_backend": "rtmpose-wholebody",
+            "rtmpose_device": "cuda",
             "rtmpose_tracking": True,
         },
-    },
-    {
-        "title": "ChArUco A3",
-        "description": "Recommended A3 board calibration setup.",
-        "section": "Calibration",
-        "people": 1,
-        "values": CHARUCO_A3_PRESET,
-    },
-    {
-        "title": "ChArUco Rescue",
-        "description": "More forgiving board detection for distant or compressed calibration videos.",
-        "section": "Calibration",
-        "people": 1,
-        "values": CHARUCO_RESCUE_PRESET,
+        "option_label": "WholeBody mode",
+        "options": ("Lightweight", "Balanced", "Performance"),
+        "default_option": "Balanced",
+        "option_values": {
+            "Lightweight": {"rtmpose_mode": "lightweight"},
+            "Balanced": {"rtmpose_mode": "balanced"},
+            "Performance": {"rtmpose_mode": "performance"},
+        },
     },
 )
 
@@ -320,9 +397,13 @@ class KinaraLauncher(QMainWindow):
         self.advanced_row_texts: dict[str, str] = {}
         self.advanced_search: QLineEdit | None = None
         self.python_path: QLineEdit | None = None
-        self.people_count: QSpinBox | None = None
+        self.destination: QLineEdit | None = None
+        self.source_list: QListWidget | None = None
+        self.people_count: QLineEdit | None = None
         self.people_box: QVBoxLayout | None = None
         self.calibration_mode: QCheckBox | None = None
+        self.triangulate_after_calibration: QCheckBox | None = None
+        self.calibration_paper_size: QComboBox | None = None
         self.calibration_output_path: QLineEdit | None = None
         self.triangulation_enabled: QCheckBox | None = None
         self.triangulation_calibration_path: QLineEdit | None = None
@@ -338,6 +419,8 @@ class KinaraLauncher(QMainWindow):
         self.stop_timer.timeout.connect(self.kill_run)
         self._animations: list[QPropertyAnimation] = []
         self.theme_button: QToolButton | None = None
+        self.command_line: QLineEdit | None = None
+        self.command_customized = False
         self.current_theme = "dark"
 
         self.setStyleSheet(app_style("dark"))
@@ -348,6 +431,7 @@ class KinaraLauncher(QMainWindow):
         self._refresh_people()
         self._refresh_sources()
         self._refresh_preview()
+        self._sync_command_line(force=True)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -407,7 +491,7 @@ class KinaraLauncher(QMainWindow):
         command_bar.setObjectName("commandBar")
         controls = QHBoxLayout(command_bar)
         controls.setContentsMargins(10, 10, 10, 10)
-        controls.setSpacing(10)
+        controls.setSpacing(8)
         self.start_button = QPushButton("Start")
         self.start_button.setObjectName("primaryButton")
         self.start_button.clicked.connect(self.start_run)
@@ -415,7 +499,7 @@ class KinaraLauncher(QMainWindow):
         self.check_button.setObjectName("secondaryButton")
         self.check_button.clicked.connect(self.check_runtime)
         self.stop_button = QPushButton("Stop")
-        self.stop_button.setObjectName("dangerButton")
+        self.stop_button.setObjectName("neutralButton")
         self.stop_button.clicked.connect(self.stop_run)
         self.kill_button = QPushButton("Kill")
         self.kill_button.setObjectName("killButton")
@@ -425,10 +509,36 @@ class KinaraLauncher(QMainWindow):
         controls.addWidget(self.start_button)
         controls.addWidget(self.check_button)
         controls.addWidget(self.stop_button)
+        kill_divider = QFrame()
+        kill_divider.setObjectName("commandDivider")
+        kill_divider.setFrameShape(QFrame.Shape.VLine)
+        controls.addSpacing(8)
+        controls.addWidget(kill_divider)
+        controls.addSpacing(8)
         controls.addWidget(self.kill_button)
         controls.addWidget(self.status)
         controls.addStretch(1)
         left.addWidget(command_bar)
+
+        command_editor = QFrame()
+        command_editor.setObjectName("commandBar")
+        command_layout = QVBoxLayout(command_editor)
+        command_layout.setContentsMargins(10, 10, 10, 10)
+        command_layout.setSpacing(8)
+        command_label = QLabel("Command")
+        command_label.setObjectName("advancedLabel")
+        command_layout.addWidget(command_label)
+        command_row = QHBoxLayout()
+        self.command_line = QLineEdit()
+        self.command_line.setPlaceholderText("Kinara runner command")
+        self.command_line.textEdited.connect(self._mark_command_customized)
+        update_command = QPushButton("Update")
+        update_command.setObjectName("secondaryButton")
+        update_command.clicked.connect(lambda: self._sync_command_line(force=True))
+        command_row.addWidget(self.command_line, 1)
+        command_row.addWidget(update_command)
+        command_layout.addLayout(command_row)
+        left.addWidget(command_editor)
 
         self.log = QTextEdit()
         self.log.setObjectName("log")
@@ -545,6 +655,7 @@ class KinaraLauncher(QMainWindow):
         layout.addWidget(section_label("Destination"))
         dest_row = QHBoxLayout()
         self.destination = QLineEdit(str(Path.cwd() / "outputs"))
+        self.destination.textEdited.connect(lambda _text: self._sync_command_line())
         browse_dest = QPushButton("Browse")
         browse_dest.setObjectName("secondaryButton")
         browse_dest.clicked.connect(self.choose_destination)
@@ -607,12 +718,19 @@ class KinaraLauncher(QMainWindow):
         outer = QVBoxLayout(tab)
         outer.setSpacing(10)
 
-        hint = QLabel("One-click setups for common demo and capture situations.")
+        hint = QLabel("Choose a backend or workflow, select its preset, then apply it to the runner command.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         outer.addWidget(hint)
 
         scroll = QScrollArea()
+        scroll.setObjectName("tabScroll")
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        content.setObjectName("scrollContent")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(10)
         scroll.setObjectName("tabScroll")
         scroll.setWidgetResizable(True)
         content = QWidget()
@@ -648,10 +766,58 @@ class KinaraLauncher(QMainWindow):
         description.setWordWrap(True)
         layout.addWidget(description)
 
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+
+        option_combo = None
+        options = preset.get("options")
+        if isinstance(options, tuple):
+            opt_col = QVBoxLayout()
+            opt_col.setSpacing(2)
+            opt_label = QLabel(str(preset.get("option_label", "Option")))
+            opt_label.setObjectName("hint")
+            option_combo = QComboBox()
+            option_combo.addItems([str(option) for option in options])
+            default_option = preset.get("default_option")
+            if isinstance(default_option, str):
+                option_combo.setCurrentText(default_option)
+            opt_col.addWidget(opt_label)
+            opt_col.addWidget(option_combo)
+            action_row.addLayout(opt_col, 1)
+
+        weight_combo = None
+        weight_options = preset.get("weight_options")
+        if isinstance(weight_options, tuple):
+            w_col = QVBoxLayout()
+            w_col.setSpacing(2)
+            w_label = QLabel(str(preset.get("weight_label", "Hand weight")))
+            w_label.setObjectName("hint")
+            weight_combo = QComboBox()
+            weight_combo.addItems([str(option) for option in weight_options])
+            weight_combo.setCurrentText("Full")
+            w_col.addWidget(w_label)
+            w_col.addWidget(weight_combo)
+            action_row.addLayout(w_col, 1)
+
         apply_button = QPushButton("Apply")
         apply_button.setObjectName("primaryButton")
-        apply_button.clicked.connect(lambda _checked=False, selected=preset: self._apply_launcher_preset(selected))
-        layout.addWidget(apply_button)
+        apply_button.clicked.connect(
+            lambda _checked=False, selected=preset, combo=option_combo, weights=weight_combo: self._apply_launcher_preset(
+                selected,
+                combo.currentText() if combo is not None else None,
+                weights.currentText() if weights is not None else None,
+            )
+        )
+        if isinstance(options, tuple) or isinstance(weight_options, tuple):
+            apply_col = QVBoxLayout()
+            apply_col.setSpacing(2)
+            apply_col.addStretch(1)
+            apply_col.addWidget(apply_button)
+            action_row.addLayout(apply_col)
+        else:
+            action_row.addWidget(apply_button)
+
+        layout.addLayout(action_row)
         return card
 
     def _calibration_tab(self) -> QWidget:
@@ -666,22 +832,29 @@ class KinaraLauncher(QMainWindow):
         hero_layout.setContentsMargins(12, 12, 12, 12)
         hero_layout.setSpacing(10)
 
-        title = QLabel("Camera Calibration")
+        title = QLabel("Calibration")
         title.setObjectName("advancedLabel")
         hero_layout.addWidget(title)
 
-        hint = QLabel("Select synchronized ChArUco videos in Files, enable calibration mode, then Start. The run will save a camera calibration file and quality report.")
+        hint = QLabel("Select synchronized ChArUco videos in Files, enable calibration mode, then Start. The run will save a camera calibration file and quality report. A3 is the default board size. Rescue mode uses lenient detection for distant, compressed, blurry, or otherwise weak calibration footage.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         hero_layout.addWidget(hint)
 
         self.calibration_mode = QCheckBox("Calibration mode")
         self.calibration_mode.setChecked(False)
+        self.calibration_mode.stateChanged.connect(lambda _state: self._sync_command_line())
         hero_layout.addWidget(self.calibration_mode)
+
+        self.triangulate_after_calibration = QCheckBox("Instant Triangulation")
+        self.triangulate_after_calibration.setChecked(False)
+        self.triangulate_after_calibration.stateChanged.connect(lambda _state: self._sync_command_line())
+        hero_layout.addWidget(self.triangulate_after_calibration)
 
         output_row = QHBoxLayout()
         self.calibration_output_path = QLineEdit("")
         self.calibration_output_path.setPlaceholderText(r"Output .toml path or folder")
+        self.calibration_output_path.textEdited.connect(lambda _text: self._sync_command_line())
         browse = QPushButton("Browse")
         browse.setObjectName("secondaryButton")
         browse.clicked.connect(self.choose_calibration_output)
@@ -689,12 +862,25 @@ class KinaraLauncher(QMainWindow):
         output_row.addWidget(browse)
         hero_layout.addLayout(output_row)
 
+        paper_row = QHBoxLayout()
+        paper_label = QLabel("Paper size")
+        paper_label.setObjectName("advancedLabel")
+        self.calibration_paper_size = QComboBox()
+        self.calibration_paper_size.addItems(tuple(CHARUCO_PAPER_PRESETS))
+        self.calibration_paper_size.setCurrentText("A3")
+        self.calibration_paper_size.currentTextChanged.connect(self._apply_paper_size_preset)
+        paper_row.addWidget(paper_label)
+        paper_row.addWidget(self.calibration_paper_size, 1)
+        hero_layout.addLayout(paper_row)
+
         preset_row = QHBoxLayout()
         a3 = QPushButton("A3 Board")
         a3.setObjectName("primaryButton")
+        a3.setToolTip("Standard ChArUco A3 board preset")
         a3.clicked.connect(lambda: self._apply_charuco_preset(CHARUCO_A3_PRESET))
         rescue = QPushButton("Rescue")
         rescue.setObjectName("secondaryButton")
+        rescue.setToolTip("Rescue is a lenient ChArUco detection mode for distant, compressed, blurry, or otherwise weak calibration footage.")
         rescue.clicked.connect(lambda: self._apply_charuco_preset(CHARUCO_RESCUE_PRESET))
         show = QPushButton("Tune ChArUco")
         show.setObjectName("secondaryButton")
@@ -827,7 +1013,7 @@ class KinaraLauncher(QMainWindow):
         row.setObjectName("advancedRow")
         layout = QVBoxLayout(row)
         layout.setContentsMargins(10, 8, 10, 8)
-        label = QLabel("Python 3.11 runtime")
+        label = QLabel("Package installer Python")
         label.setObjectName("advancedLabel")
         layout.addWidget(label)
 
@@ -843,7 +1029,7 @@ class KinaraLauncher(QMainWindow):
         picker.addWidget(browse)
         layout.addLayout(picker)
 
-        help_label = QLabel("Used for installing/checking runtime packages. A folder ending in Python311 is accepted.")
+        help_label = QLabel("Used for package installation and runtime checks. Dev-mode runner still uses the launcher process Python.")
         help_label.setObjectName("hint")
         help_label.setWordWrap(True)
         layout.addWidget(help_label)
@@ -860,20 +1046,16 @@ class KinaraLauncher(QMainWindow):
         label.setObjectName("advancedLabel")
         layout.addWidget(label)
 
-        amount_row = QHBoxLayout()
-        amount_row.addWidget(QLabel("Amount"))
-        self.people_count = QSpinBox()
-        self.people_count.setRange(1, 12)
-        self.people_count.setValue(1)
-        self.people_count.valueChanged.connect(self._refresh_people)
-        amount_row.addWidget(self.people_count)
-        amount_row.addStretch(1)
-        layout.addLayout(amount_row)
+        self.people_count = QLineEdit("1")
+        self.people_count.setPlaceholderText("1 - 12")
+        self.people_count.textChanged.connect(self._on_people_count_changed)
+        self.people_count.editingFinished.connect(self._on_people_count_edited)
+        layout.addWidget(self.people_count)
 
         self.people_box = QVBoxLayout()
         layout.addLayout(self.people_box)
 
-        hint = QLabel("Color hints help keep identities stable when multiple people are visible.")
+        hint = QLabel("Color hints help keep identities stable when multiple people (2+) are visible.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -881,6 +1063,38 @@ class KinaraLauncher(QMainWindow):
         self.advanced_rows["runtime_people"] = row
         self.advanced_row_texts["runtime_people"] = "runtime people max people amount identity color hints multi person"
         return row
+
+    def _get_people_count(self) -> int:
+        if self.people_count is None:
+            return 1
+        text = self.people_count.text().strip()
+        if not text.isdigit():
+            return 1
+        val = int(text)
+        return max(1, min(12, val))
+
+    def _set_people_count(self, count: int) -> None:
+        if self.people_count is not None:
+            clamped = max(1, min(12, count))
+            self.people_count.blockSignals(True)
+            self.people_count.setText(str(clamped))
+            self.people_count.blockSignals(False)
+            self._refresh_people()
+
+    def _on_people_count_changed(self, text: str) -> None:
+        clean = text.strip()
+        if clean.isdigit():
+            val = int(clean)
+            if 1 <= val <= 12:
+                self._refresh_people()
+
+    def _on_people_count_edited(self) -> None:
+        count = self._get_people_count()
+        if self.people_count is not None:
+            self.people_count.blockSignals(True)
+            self.people_count.setText(str(count))
+            self.people_count.blockSignals(False)
+        self._refresh_people()
 
     def _calibration_quick_panel(self) -> QFrame:
         panel = QFrame()
@@ -893,7 +1107,7 @@ class KinaraLauncher(QMainWindow):
         title.setObjectName("advancedLabel")
         layout.addWidget(title)
 
-        text = QLabel("Use the A3 preset for the recommended board, or rescue mode for compressed/distant videos.")
+        text = QLabel("Use the A3 preset for the recommended board size, or Rescue mode (lenient detection) for compressed, blurry, or distant footage.")
         text.setObjectName("hint")
         text.setWordWrap(True)
         layout.addWidget(text)
@@ -901,9 +1115,11 @@ class KinaraLauncher(QMainWindow):
         buttons = QHBoxLayout()
         a3 = QPushButton("A3 Board")
         a3.setObjectName("primaryButton")
+        a3.setToolTip("Standard ChArUco A3 board preset")
         a3.clicked.connect(lambda: self._apply_charuco_preset(CHARUCO_A3_PRESET))
         rescue = QPushButton("Rescue")
         rescue.setObjectName("secondaryButton")
+        rescue.setToolTip("Rescue is a lenient ChArUco detection mode for distant, compressed, blurry, or otherwise weak calibration footage.")
         rescue.clicked.connect(lambda: self._apply_charuco_preset(CHARUCO_RESCUE_PRESET))
         open_section = QPushButton("Show Options")
         open_section.setObjectName("secondaryButton")
@@ -930,6 +1146,8 @@ class KinaraLauncher(QMainWindow):
         elif action.choices:
             control = QComboBox()
             values = [str(choice) for choice in action.choices]
+            if action.default in (None, argparse.SUPPRESS) and "" not in values:
+                values.insert(0, "")
             control.addItems(values)
             default = "" if action.default in (None, argparse.SUPPRESS) else str(action.default)
             if default in values:
@@ -966,27 +1184,53 @@ class KinaraLauncher(QMainWindow):
         self._open_advanced_section("Calibration")
         self.status.setText("ChArUco preset applied")
 
-    def _apply_launcher_preset(self, preset: dict[str, object]) -> None:
+    def _apply_paper_size_preset(self, paper_size: str) -> None:
+        values = CHARUCO_PAPER_PRESETS.get(paper_size)
+        if values is None:
+            return
+        for dest, value in values.items():
+            self._set_advanced_control_value(dest, value)
+
+    def _apply_launcher_preset(self, preset: dict[str, object], option: str | None = None, weight: str | None = None) -> None:
+        for dest in BACKEND_MODEL_DESTS:
+            self._reset_advanced_control(dest)
+
         people = preset.get("people")
-        if isinstance(people, int) and self.people_count is not None:
-            self.people_count.setValue(people)
+        if isinstance(people, int):
+            self._set_people_count(people)
 
         values = preset.get("values", {})
         if isinstance(values, dict):
             for dest, value in values.items():
                 self._set_advanced_control_value(str(dest), value)
+        option_values = preset.get("option_values", {})
+        if option is not None and isinstance(option_values, dict):
+            selected_values = option_values.get(option, {})
+            if isinstance(selected_values, dict):
+                for dest, value in selected_values.items():
+                    self._set_advanced_control_value(str(dest), value)
+        weight_values = preset.get("weight_values", {})
+        if weight is not None and isinstance(weight_values, dict):
+            selected_weight_values = weight_values.get(weight, {})
+            if isinstance(selected_weight_values, dict):
+                for dest, value in selected_weight_values.items():
+                    self._set_advanced_control_value(str(dest), value)
 
         section = preset.get("section")
         if isinstance(section, str):
             self._open_advanced_section(section)
-        self.status.setText(f"{preset['title']} preset applied")
+        suffix_parts = [part for part in (option, weight) if part]
+        suffix = f" ({', '.join(suffix_parts)})" if suffix_parts else ""
+        self.status.setText(f"{preset['title']}{suffix} preset applied")
+        self._sync_command_line(force=True)
 
     def reset_defaults(self) -> None:
         self._set_theme("dark")
-        if self.people_count is not None:
-            self.people_count.setValue(1)
+        self._set_people_count(1)
         if self.calibration_mode is not None:
             self.calibration_mode.setChecked(False)
+        if self.triangulate_after_calibration is not None:
+            self.triangulate_after_calibration.setChecked(False)
         if self.calibration_output_path is not None:
             self.calibration_output_path.clear()
         if self.triangulation_enabled is not None:
@@ -1008,11 +1252,32 @@ class KinaraLauncher(QMainWindow):
             self.advanced_search.clear()
         self._open_advanced_section("Runtime")
         self._sync_backend_controls()
+        self._sync_command_line(force=True)
         self.status.setText("Defaults restored")
 
+    def _reset_advanced_control(self, dest: str) -> None:
+        action_control = self.advanced_controls.get(dest)
+        if action_control is None:
+            return
+        action, control = action_control
+        if isinstance(control, QCheckBox):
+            control.setChecked(bool(action.default))
+        elif isinstance(control, QComboBox):
+            default = default_text(action.default)
+            if default in [control.itemText(index) for index in range(control.count())]:
+                control.setCurrentText(default)
+            elif control.count():
+                control.setCurrentIndex(0)
+        elif isinstance(control, QLineEdit):
+            control.setText(default_text(action.default))
+
     def _set_advanced_control_value(self, dest: str, value: object) -> None:
-        if dest == "max_people" and self.people_count is not None:
-            self.people_count.setValue(int(value))
+        if dest == "max_people":
+            try:
+                val = int(value)
+                self._set_people_count(val)
+            except (ValueError, TypeError):
+                pass
             return
         if dest == "calibrate_cameras" and self.calibration_mode is not None:
             self.calibration_mode.setChecked(bool(value))
@@ -1033,6 +1298,7 @@ class KinaraLauncher(QMainWindow):
             control.setCurrentText(str(value))
         elif isinstance(control, QLineEdit):
             control.setText(str(value))
+        self._sync_command_line()
 
     def _set_theme(self, theme: str) -> None:
         self.current_theme = "light" if theme == "light" else "dark"
@@ -1130,6 +1396,7 @@ class KinaraLauncher(QMainWindow):
         path = QFileDialog.getExistingDirectory(self, "Choose output destination", self.destination.text())
         if path:
             self.destination.setText(path)
+            self._sync_command_line()
 
     def choose_python_runtime(self) -> None:
         start_dir = ""
@@ -1158,6 +1425,7 @@ class KinaraLauncher(QMainWindow):
         )
         if path and self.calibration_output_path is not None:
             self.calibration_output_path.setText(path)
+            self._sync_command_line()
 
     def choose_triangulation_calibration(self) -> None:
         start_dir = ""
@@ -1172,6 +1440,7 @@ class KinaraLauncher(QMainWindow):
         )
         if path and self.triangulation_calibration_path is not None:
             self.triangulation_calibration_path.setText(path)
+            self._sync_command_line()
 
     def _refresh_sources(self) -> None:
         self.source_list.clear()
@@ -1181,22 +1450,27 @@ class KinaraLauncher(QMainWindow):
         self.source_summary.setText(f"{count} source" if count == 1 else f"{count} sources")
         self._pulse_widget(self.source_summary, low=0.82, duration=160)
         self._pulse_widget(self.source_list, low=0.9, duration=180)
+        self._sync_command_line()
 
     def _refresh_people(self) -> None:
-        if self.people_box is None or self.people_count is None:
+        if self.people_box is None:
             return
         clear_layout(self.people_box)
         self.person_color_controls.clear()
-        for index in range(self.people_count.value()):
-            row = QHBoxLayout()
-            row.addWidget(QLabel(f"person{index + 1}"))
-            combo = QComboBox()
-            combo.addItems(COLOR_PRESETS)
-            combo.setCurrentText(COLOR_PRESETS[min(index, len(COLOR_PRESETS) - 1)])
-            row.addWidget(combo, 1)
-            self.people_box.addLayout(row)
-            self.person_color_controls.append(combo)
-            self._pulse_widget(combo, low=0.88, duration=160)
+        count = self._get_people_count()
+        if count >= 2:
+            for index in range(count):
+                row = QHBoxLayout()
+                row.addWidget(QLabel(f"person{index + 1}"))
+                combo = QComboBox()
+                combo.addItems(COLOR_PRESETS)
+                combo.setCurrentText(COLOR_PRESETS[min(index, len(COLOR_PRESETS) - 1)])
+                row.addWidget(combo, 1)
+                self.people_box.addLayout(row)
+                self.person_color_controls.append(combo)
+                combo.currentTextChanged.connect(lambda _text: self._sync_command_line())
+                self._pulse_widget(combo, low=0.88, duration=160)
+        self._sync_command_line()
 
     def _refresh_preview(self) -> None:
         clear_layout(self.preview_layout, preserve={self.live_preview_label})
@@ -1295,6 +1569,8 @@ class KinaraLauncher(QMainWindow):
         self._animate_opacity(widget, start=low, end=1.0, duration=duration)
 
     def eventFilter(self, watched, event) -> bool:
+        if watched is self.start_button and event.type() == QEvent.Type.MouseButtonPress:
+            self._press_start_button()
         if isinstance(watched, (QAbstractButton, QComboBox, QSpinBox, QTabBar, QListWidget)):
             if event.type() == QEvent.Type.MouseButtonPress:
                 self._pulse_widget(watched, low=0.72, duration=130)
@@ -1302,30 +1578,56 @@ class KinaraLauncher(QMainWindow):
             self._pulse_widget(watched, low=0.86, duration=160)
         return super().eventFilter(watched, event)
 
+    def _press_start_button(self) -> None:
+        geometry = self.start_button.geometry()
+        inset_x = max(1, int(round(geometry.width() * 0.02)))
+        inset_y = max(1, int(round(geometry.height() * 0.04)))
+        pressed = geometry.adjusted(inset_x, inset_y, -inset_x, -inset_y)
+        animation = QPropertyAnimation(self.start_button, b"geometry", self.start_button)
+        animation.setDuration(120)
+        animation.setStartValue(pressed)
+        animation.setEndValue(geometry)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        def finish() -> None:
+            if animation in self._animations:
+                self._animations.remove(animation)
+
+        animation.finished.connect(finish)
+        self._animations.append(animation)
+        animation.start()
+
     def build_args(self) -> list[str]:
         args: list[str] = []
         for source in self.sources:
             args.extend(["--source", source])
-        if self.destination.text().strip():
+        if self.destination is not None and self.destination.text().strip():
             args.extend(["--output-dir", self.destination.text().strip()])
-        people_count = self.people_count.value() if self.people_count is not None else 1
+        people_count = self._get_people_count()
         args.extend(["--max-people", str(people_count)])
-        for index, combo in enumerate(self.person_color_controls, start=1):
-            color = combo.currentText().strip()
-            if color:
-                args.extend(["--identity", f"person{index}={color}"])
+        if people_count >= 2:
+            for index, combo in enumerate(self.person_color_controls, start=1):
+                color = combo.currentText().strip()
+                if color:
+                    args.extend(["--identity", f"person{index}={color}"])
         args.extend(self._advanced_args())
         args.extend(self._workflow_args())
         args.append("--skip-runtime-check")
         args.append("--no-preview")
         return args
 
-    def _workflow_args(self) -> list[str]:
+    def _workflow_args(self, *, for_runtime_check: bool = False) -> list[str]:
         args: list[str] = []
         if self.calibration_mode is not None and self.calibration_mode.isChecked():
             args.append("--calibrate-cameras")
             if self.calibration_output_path is not None and self.calibration_output_path.text().strip():
                 args.extend(["--calibration-output", self.calibration_output_path.text().strip()])
+            if (
+                not for_runtime_check
+                and self.triangulate_after_calibration is not None
+                and self.triangulate_after_calibration.isChecked()
+            ):
+                args.append("--triangulate-3d")
         if self.triangulation_enabled is not None and self.triangulation_enabled.isChecked():
             args.append("--triangulate-3d")
             if self.triangulation_calibration_path is not None and self.triangulation_calibration_path.text().strip():
@@ -1369,6 +1671,7 @@ class KinaraLauncher(QMainWindow):
                 control.setEnabled(not wholebody_selected)
             if row is not None:
                 row.setEnabled(not wholebody_selected)
+        self._sync_command_line()
 
     def start_run(self) -> None:
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
@@ -1377,17 +1680,17 @@ class KinaraLauncher(QMainWindow):
         if not self.sources:
             show_message(self, QMessageBox.Icon.Warning, "Choose at least one file or camera source.")
             return
-        command = self._runner_command(self.build_args())
+        command = self._command_from_editor()
         self._start_process(command, enable_preview_stream=True, status_text="Running")
 
     def check_runtime(self) -> None:
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
             show_message(self, QMessageBox.Icon.Information, "Kinara is already running.")
             return
-        people_count = self.people_count.value() if self.people_count is not None else 1
+        people_count = self._get_people_count()
         command = self._runner_command([
             *self._advanced_args(),
-            *self._workflow_args(),
+            *self._workflow_args(for_runtime_check=True),
             "--max-people",
             str(people_count),
             "--runtime-check",
@@ -1399,7 +1702,6 @@ class KinaraLauncher(QMainWindow):
         log_path = default_run_log_path("kinara_run", root=Path(self._app_dir()) / ".kinara_logs")
         self.log.clear()
         self.log.append("> " + " ".join(quote(part) for part in command))
-        self.log.append(f"Log file: {log_path}")
         self.status.setText(status_text)
         if enable_preview_stream:
             self._prepare_preview_stream()
@@ -1472,6 +1774,38 @@ class KinaraLauncher(QMainWindow):
         if getattr(sys, "frozen", False):
             return [sys.executable, "--kinara-runner", *args]
         return [sys.executable, str(Path(__file__).resolve()), "--kinara-runner", *args]
+
+    def _command_text(self, command: list[str]) -> str:
+        if sys.platform == "win32":
+            return subprocess.list2cmdline(command)
+        return " ".join(quote(part) for part in command)
+
+    def _default_command(self) -> list[str]:
+        return self._runner_command(self.build_args())
+
+    def _sync_command_line(self, *, force: bool = False) -> None:
+        if self.command_line is None:
+            return
+        if self.command_customized and not force:
+            return
+        self.command_customized = False
+        self.command_line.blockSignals(True)
+        self.command_line.setText(self._command_text(self._default_command()))
+        self.command_line.blockSignals(False)
+
+    def _mark_command_customized(self, _text: str) -> None:
+        self.command_customized = True
+
+    def _command_from_editor(self) -> list[str]:
+        if self.command_line is None:
+            return self._default_command()
+        text = self.command_line.text().strip()
+        if not text:
+            return self._default_command()
+        command = split_command_line(text)
+        if command:
+            return command
+        return self._default_command()
 
     def _app_dir(self) -> str:
         if getattr(sys, "frozen", False):
@@ -1580,6 +1914,40 @@ def show_message(parent: QWidget, icon: QMessageBox.Icon, text: str) -> None:
     message.exec()
 
 
+def split_command_line(text: str) -> list[str]:
+    if sys.platform == "win32":
+        argc = ctypes.c_int()
+        command_line_to_argv = ctypes.windll.shell32.CommandLineToArgvW
+        command_line_to_argv.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int)]
+        command_line_to_argv.restype = ctypes.POINTER(ctypes.c_wchar_p)
+        argv = command_line_to_argv(text, ctypes.byref(argc))
+        if not argv:
+            return []
+        try:
+            return [argv[index] for index in range(argc.value)]
+        finally:
+            ctypes.windll.kernel32.LocalFree(argv)
+
+    import shlex
+
+    return shlex.split(text)
+
+
+THEME_TOKENS = {
+    "colors": {
+        "bg": "#0b0d12",
+        "surface": "#14171f",
+        "surface_hover": "#1b1f2a",
+        "accent": "#4dbdff",
+        "success": "#00c853",
+        "warning": "#ffab00",
+        "danger": "#ff1744",
+    },
+    "spacing": [4, 8, 12, 16, 24, 32],
+    "radius": 6,
+    "type_scale": [20, 14, 12, 11],
+}
+
 THEME_COLORS = {
     "dark": {
         "text": "#eef3ff",
@@ -1642,6 +2010,15 @@ THEME_COLORS = {
 
 def app_style(theme: str) -> str:
     colors = THEME_COLORS.get(theme, THEME_COLORS["dark"])
+    tokens = THEME_TOKENS
+    spacing = tokens["spacing"]
+    radius = tokens["radius"]
+    type_scale = tokens["type_scale"]
+    button_variants = {
+        "primary": {"background": colors["primary"], "color": colors["primary_text"], "border": "0"},
+        "secondary": {"background": colors["surface"], "color": colors["text"], "border": f"1px solid {colors['border']}"},
+        "destructive": {"background": colors["kill_bg"], "color": colors["danger_text"], "border": "0"},
+    }
     return f"""
 * {{
     font-family: "Segoe UI", "Arial", sans-serif;
@@ -1654,39 +2031,43 @@ QMainWindow, QWidget#appRoot {{
 QFrame#preview {{
     background: {colors["panel"]};
     border: 1px solid {colors["panel_border"]};
-    border-radius: 8px;
+    border-radius: {radius}px;
 }}
 QFrame#sidebar {{
     background: {colors["panel"]};
     border: 1px solid {colors["panel_border"]};
-    border-radius: 8px;
+    border-radius: {radius}px;
 }}
 QFrame#brandHeader {{
     background: {colors["brand"]};
     border: 1px solid {colors["brand_border"]};
-    border-radius: 8px;
+    border-radius: {radius}px;
 }}
 QFrame#commandBar {{
     background: {colors["panel"]};
     border: 1px solid {colors["panel_border"]};
-    border-radius: 8px;
+    border-radius: {radius}px;
+}}
+QFrame#commandDivider {{
+    background: {colors["border"]};
+    max-width: 1px;
 }}
 QSplitter#workspaceSplitter, QSplitter#contentSplitter {{
     background: transparent;
 }}
 QSplitter#workspaceSplitter::handle, QSplitter#contentSplitter::handle {{
     background: {colors["panel_border"]};
-    border-radius: 3px;
+    border-radius: {radius}px;
 }}
 QSplitter#workspaceSplitter::handle:horizontal {{
-    width: 8px;
-    margin-top: 6px;
-    margin-bottom: 6px;
+    width: {spacing[1]}px;
+    margin-top: {spacing[1]}px;
+    margin-bottom: {spacing[1]}px;
 }}
 QSplitter#contentSplitter::handle:vertical {{
-    height: 8px;
-    margin-left: 8px;
-    margin-right: 8px;
+    height: {spacing[1]}px;
+    margin-left: {spacing[1]}px;
+    margin-right: {spacing[1]}px;
 }}
 QSplitter#workspaceSplitter::handle:hover, QSplitter#contentSplitter::handle:hover {{
     background: #9c7bff;
@@ -1694,13 +2075,13 @@ QSplitter#workspaceSplitter::handle:hover, QSplitter#contentSplitter::handle:hov
 QFrame#tile {{
     background: {colors["surface"]};
     border: 1px solid {colors["border"]};
-    border-radius: 8px;
+    border-radius: {radius}px;
 }}
 QLabel#title, QLabel#pageTitle, QLabel#section, QLabel#tileTitle {{
     color: {colors["title"]};
 }}
 QLabel#pageTitle {{
-    font-size: 18pt;
+    font-size: {type_scale[0]}pt;
     font-weight: 800;
 }}
 QLabel#muted, QLabel#hint, QLabel#tileBody {{
@@ -1713,81 +2094,84 @@ QLabel#brandSubtitle {{
 QLabel#brandPill, QLabel#presetPill {{
     background: {colors["surface"]};
     border: 1px solid {colors["border"]};
-    border-radius: 8px;
+    border-radius: {radius}px;
     color: {colors["title"]};
-    font-size: 8pt;
+    font-size: {type_scale[3]}pt;
     font-weight: 800;
-    padding: 5px 8px;
+    padding: {spacing[0]}px {spacing[1]}px;
 }}
 QLabel#section {{
     font-weight: 700;
-    font-size: 11pt;
-    margin-top: 8px;
+    font-size: {type_scale[3]}pt;
+    margin-top: {spacing[1]}px;
 }}
 QLabel#tileTitle {{
     font-weight: 700;
-    font-size: 14pt;
+    font-size: {type_scale[1]}pt;
 }}
 QLabel#tileBody {{
-    font-size: 11pt;
+    font-size: {type_scale[3]}pt;
 }}
 QLabel#livePreview {{
     background: {colors["input"]};
     border: 1px solid {colors["border"]};
-    border-radius: 8px;
+    border-radius: {radius}px;
     color: {colors["muted"]};
-    font-size: 12pt;
-    padding: 12px;
+    font-size: {type_scale[2]}pt;
+    padding: {spacing[2]}px;
 }}
 QLabel#status {{
     background: {colors["status_bg"]};
     border: 1px solid {colors["status_border"]};
-    border-radius: 8px;
+    border-radius: {radius}px;
     color: {colors["status_text"]};
     font-weight: 700;
-    padding: 8px 12px;
+    padding: {spacing[1]}px {spacing[2]}px;
 }}
 QLabel#summaryPill {{
     background: {colors["surface_soft"]};
     border: 1px solid {colors["border"]};
-    border-radius: 8px;
+    border-radius: {radius}px;
     color: {colors["title"]};
     font-weight: 700;
-    padding: 8px 12px;
+    padding: {spacing[1]}px {spacing[2]}px;
 }}
 QPushButton {{
-    background: {colors["button"]};
-    color: {colors["text"]};
-    border: 0;
-    border-radius: 8px;
-    padding: 9px 13px;
+    background: {button_variants["secondary"]["background"]};
+    color: {button_variants["secondary"]["color"]};
+    border: {button_variants["secondary"]["border"]};
+    border-radius: {radius}px;
+    padding: {spacing[1]}px {spacing[2]}px;
     min-height: 18px;
 }}
 QPushButton:hover {{
     background: {colors["button_hover"]};
 }}
 QPushButton:pressed {{
-    padding-top: 10px;
-    padding-bottom: 8px;
+    padding-top: {spacing[1]}px;
+    padding-bottom: {spacing[1]}px;
 }}
 QPushButton#primaryButton {{
-    background: {colors["primary"]};
-    color: {colors["primary_text"]};
+    background: {button_variants["primary"]["background"]};
+    color: {button_variants["primary"]["color"]};
+    border: {button_variants["primary"]["border"]};
     font-weight: 800;
     min-width: 86px;
 }}
-QPushButton#dangerButton {{
+QPushButton#neutralButton {{
     background: {colors["danger_bg"]};
     color: {colors["danger_text"]};
 }}
 QPushButton#killButton {{
-    background: {colors["kill_bg"]};
-    color: {colors["danger_text"]};
+    background: {button_variants["destructive"]["background"]};
+    color: {button_variants["destructive"]["color"]};
+    border: {button_variants["destructive"]["border"]};
     font-weight: 800;
 }}
 QPushButton#secondaryButton {{
-    background: {colors["surface"]};
-    border: 1px solid {colors["border"]};
+    background: {button_variants["secondary"]["background"]};
+    color: {button_variants["secondary"]["color"]};
+    border: {button_variants["secondary"]["border"]};
 }}
 QPushButton#wideButton {{
     text-align: left;
@@ -1796,15 +2180,15 @@ QLineEdit, QSpinBox, QComboBox, QListWidget, QTextEdit {{
     background: {colors["input"]};
     color: {colors["text"]};
     border: 1px solid {colors["border"]};
-    border-radius: 8px;
-    padding: 8px;
+    border-radius: {radius}px;
+    padding: {spacing[1]}px;
 }}
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QTextEdit:focus {{
     border: 1px solid #9c7bff;
 }}
 QListWidget::item {{
-    border-radius: 6px;
-    padding: 6px;
+    border-radius: {radius}px;
+    padding: {spacing[1]}px;
 }}
 QListWidget::item:alternate {{
     background: {colors["surface_alt"]};
@@ -1824,9 +2208,9 @@ QTabWidget::pane {{
 QTabBar::tab {{
     background: {colors["surface_soft"]};
     color: {colors["muted"]};
-    padding: 9px 14px;
-    border-radius: 8px;
-    margin-right: 5px;
+    padding: {spacing[1]}px {spacing[2]}px;
+    border-radius: {radius}px;
+    margin-right: {spacing[0]}px;
     font-weight: 700;
 }}
 QTabBar::tab:selected {{
@@ -1852,9 +2236,9 @@ QToolButton#accordionHeader {{
     background: {colors["surface_soft"]};
     color: {colors["text"]};
     border: 1px solid {colors["border"]};
-    border-radius: 8px;
-    padding: 9px 10px;
-    margin-top: 4px;
+    border-radius: {radius}px;
+    padding: {spacing[1]}px {spacing[1]}px;
+    margin-top: {spacing[0]}px;
     font-weight: 700;
     text-align: left;
 }}
@@ -1868,19 +2252,19 @@ QToolButton#accordionHeader:hover {{
 QFrame#advancedRow {{
     background: {colors["surface"]};
     border: 1px solid {colors["border"]};
-    border-radius: 8px;
+    border-radius: {radius}px;
 }}
 QFrame#calibrationPanel, QFrame#presetCard, QFrame#workflowPanel {{
     background: {colors["calibration"]};
     border: 1px solid {colors["border"]};
-    border-radius: 8px;
+    border-radius: {radius}px;
 }}
 QLabel#advancedLabel {{
     color: {colors["title"]};
     font-weight: 600;
 }}
 QCheckBox {{
-    spacing: 8px;
+    spacing: {spacing[1]}px;
 }}
 QScrollArea {{
     border: 0;
@@ -1895,8 +2279,8 @@ QScrollArea#tabScroll > QWidget {{
 QToolButton#iconButton {{
     background: {colors["surface"]};
     border: 1px solid {colors["border"]};
-    border-radius: 8px;
-    padding: 8px;
+    border-radius: {radius}px;
+    padding: {spacing[1]}px;
     min-width: 34px;
     min-height: 32px;
 }}
@@ -1906,9 +2290,9 @@ QToolButton#iconButton:hover {{
 QToolButton#toolbarIconButton {{
     background: {colors["input"]};
     border: 1px solid {colors["border"]};
-    border-radius: 8px;
+    border-radius: {radius}px;
     color: {colors["title"]};
-    font-size: 14pt;
+    font-size: {type_scale[1]}pt;
     font-weight: 800;
     min-width: 38px;
     max-width: 38px;

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+from collections import Counter
 
 Point = tuple[int, int, float]
+HAND_REJECTION_COUNTS: Counter[str] = Counter()
 
 DEFAULT_HAND_TEMPLATE = {
     0: (0.00, 0.00),
@@ -61,6 +63,7 @@ def is_hand_detection_valid(
     config,
 ) -> bool:
     if hand_points is None or len(hand_points) != 21:
+        record_hand_rejection("missing_points")
         return False
 
     wrist_xy = _point_xy(wrist_point)
@@ -69,25 +72,41 @@ def is_hand_detection_valid(
     forearm_len = max(math.hypot(wrist_xy[0] - elbow_xy[0], wrist_xy[1] - elbow_xy[1]), 1.0)
 
     wrist_offset = math.hypot(hand_wrist_xy[0] - wrist_xy[0], hand_wrist_xy[1] - wrist_xy[1])
-    max_wrist_offset = max(config.hand_box_min_size * 0.30, forearm_len * config.hand_wrist_max_offset_scale)
+    max_wrist_offset = max(config.hand_box_min_size * 0.38, forearm_len * config.hand_wrist_max_offset_scale * 1.15)
     if wrist_offset > max_wrist_offset:
+        record_hand_rejection("wrist_offset")
         return False
 
     valid_points = sum(point[2] > config.hand_kp_threshold * 0.5 for point in hand_points)
     if valid_points < config.hand_min_valid_points:
+        record_hand_rejection("valid_points")
         return False
 
     max_radial = max(math.hypot(point[0] - wrist_xy[0], point[1] - wrist_xy[1]) for point in hand_points[1:])
-    if max_radial > max(forearm_len * 2.40, config.hand_box_min_size * 1.20):
+    if max_radial > max(forearm_len * 2.75, config.hand_box_min_size * 1.40):
+        record_hand_rejection("radial_distance")
         return False
 
     palm_indices = (5, 9, 13, 17)
     palm_distances = [math.hypot(hand_points[index][0] - wrist_xy[0], hand_points[index][1] - wrist_xy[1]) for index in palm_indices]
     average_palm_distance = sum(palm_distances) / len(palm_distances)
-    if average_palm_distance < forearm_len * 0.04 or average_palm_distance > max(forearm_len * 1.60, config.hand_box_min_size * 0.45):
+    if average_palm_distance < forearm_len * 0.035 or average_palm_distance > max(forearm_len * 1.85, config.hand_box_min_size * 0.55):
+        record_hand_rejection("palm_distance")
         return False
 
     return True
+
+
+def record_hand_rejection(reason: str) -> None:
+    HAND_REJECTION_COUNTS[reason] += 1
+
+
+def pop_hand_rejection_telemetry() -> dict[str, int]:
+    if not HAND_REJECTION_COUNTS:
+        return {}
+    snapshot = dict(HAND_REJECTION_COUNTS)
+    HAND_REJECTION_COUNTS.clear()
+    return snapshot
 
 
 def has_usable_hand_detection(hand_points: list[Point] | None, config) -> bool:

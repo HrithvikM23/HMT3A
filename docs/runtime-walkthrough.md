@@ -312,7 +312,7 @@ If nothing matches strongly enough, it creates a new `PersonTrack`.
 
 When a track is updated from a detection, the tracker does not run a full body pipeline again. It already has the body points from YOLO. It only runs the track's `PoseHandPipeline.detect_hands(frame, body_points)` to get hands relative to that specific body.
 
-Hand candidates are no longer selected by raw detector confidence alone. The pipeline retries the wrist crop, can reuse the previous hand box as a candidate, anchors detections back to the body wrist, scores candidates against palm geometry and recent motion, and blends accepted detections with the predicted hand path. If detection drops for a moment, the previous hand is translated by wrist/elbow motion before the generated fallback is used.
+Hand candidates are no longer selected by raw detector confidence alone. The pipeline tries the expanded previous hand box first, then the wrist-elbow geometry crop, then wider retry crops. It anchors detections back to the body wrist, scores candidates against palm geometry and recent motion, and blends accepted detections with the predicted hand path. If detection drops for a moment, the previous hand is translated with acceleration-aware wrist/elbow motion before the generated fallback is used.
 
 This is a good example of code reuse: the same hand pipeline is used in both single-person and multi-person mode, but the track already supplies the body.
 

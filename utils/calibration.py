@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 from pathlib import Path
 from types import MethodType
@@ -317,12 +316,11 @@ def _enable_low_resolution_charuco_detection(
 def _load_calibration_classes():
     try:
         import cv2
+        from aniposelib.boards import CharucoBoard
+        from aniposelib.cameras import CameraGroup
 
         if not hasattr(cv2, "aruco"):
             raise RuntimeError("OpenCV ArUco support is not installed; install opencv-contrib-python.")
-        package_prefix = "".join(("ani", "pose", "lib"))
-        boards_module = importlib.import_module(f"{package_prefix}.boards")
-        cameras_module = importlib.import_module(f"{package_prefix}.cameras")
     except ModuleNotFoundError:
         raise
-    return cameras_module.CameraGroup, boards_module.CharucoBoard
+    return CameraGroup, CharucoBoard

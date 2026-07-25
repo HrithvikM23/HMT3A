@@ -353,7 +353,7 @@ Notes: Hands are usually the expensive part because each visible person can requ
 Function: Sets how many extra hand crop attempts run after the primary crop.  
 Accepted range: integer `>= 0`.  
 Default: `3`  
-Notes: Lower values are faster. Higher values are more robust when the first crop misses fingers.
+Notes: Lower values are faster. Higher values add wider procedural crop attempts. Use higher values when the first crop misses fingers during bent-wrist or fast-hand motion.
 
 `--fps-log-interval`  
 Function: Prints render throughput every N seconds.  
@@ -400,7 +400,7 @@ Default: `30.0`
 
 `--output-fourcc`  
 Function: Sets the video writer codec code.  
-Accepted values: text string with at least 4 characters. First 4 are used.  
+Accepted values: printable ASCII text with at least 4 characters. First 4 are used.
 Default: `mp4v`
 
 ## Drawing Colors
@@ -434,6 +434,16 @@ Function: Sets hand landmark point color.
 Accepted values: `B,G,R` integers.  
 Accepted range: each channel `0` to `255`.  
 Default: `0,165,255`
+
+`--fallback-hand-color`
+Function: Sets the debug color used for generated fallback hands.
+Accepted values: `B,G,R` integers.
+Accepted range: each channel `0` to `255`.
+Default: `255,0,255`
+
+`--debug-fallback-hands`
+Function: Draws generated fallback hands with the fallback hand color so they are visually distinct from real detections.
+Default: disabled
 
 ## Drawing Sizes
 

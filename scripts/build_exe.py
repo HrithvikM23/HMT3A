@@ -135,6 +135,9 @@ def build() -> None:
         "--hidden-import", "plistlib",
         "--hidden-import", "timeit",
         "--hidden-import", "zoneinfo",
+        "--hidden-import", "aniposelib",
+        "--hidden-import", "aniposelib.boards",
+        "--hidden-import", "aniposelib.cameras",
     ]
 
     try:

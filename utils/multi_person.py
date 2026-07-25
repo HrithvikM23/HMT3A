@@ -110,16 +110,6 @@ def _size_similarity_score(box_a: Box, box_b: Box) -> float:
     return float(smaller) / float(larger)
 
 
-def _non_max_suppress(boxes_with_weights: list[tuple[Box, float]], iou_threshold: float = 0.35) -> list[Box]:
-    ordered = sorted(boxes_with_weights, key=lambda item: item[1], reverse=True)
-    selected: list[Box] = []
-    for box, _ in ordered:
-        if any(_iou(box, kept_box) > iou_threshold for kept_box in selected):
-            continue
-        selected.append(box)
-    return selected
-
-
 def _expand_box(box: Box, frame_width: int, frame_height: int, scale: float) -> Box:
     x1, y1, x2, y2 = box
     width = x2 - x1
@@ -175,15 +165,11 @@ def _translate_body_points(points: list[Point], offset_x: int, offset_y: int) ->
     return [(x + offset_x, y + offset_y, conf) for x, y, conf in points]
 
 
-def _translate_hands(hands_by_side: dict[str, HandPayload], offset_x: int, offset_y: int) -> dict[str, HandPayload]:
-    translated: dict[str, HandPayload] = {}
-    for side, payload in hands_by_side.items():
-        x1, y1, x2, y2 = payload["box"]
-        translated[side] = {
-            "box": (x1 + offset_x, y1 + offset_y, x2 + offset_x, y2 + offset_y),
-            "points": [(x + offset_x, y + offset_y, conf) for x, y, conf in payload["points"]],
-        }
-    return translated
+def _smooth_and_constrain_body(track: PersonTrack, body_points: list[Point]) -> list[Point]:
+    smoothed_points = track.pipeline.smoother.smooth_body(body_points)
+    if not smoothed_points:
+        return body_points
+    return track.pipeline._body_constraints.apply(smoothed_points)
 
 
 def _build_inference_frame(frame, processing_width: int):
@@ -245,7 +231,10 @@ class MultiPersonTracker:
             offset_y = int(round(vy))
             x1, y1, x2, y2 = track.box
             track.box = (x1 + offset_x, y1 + offset_y, x2 + offset_x, y2 + offset_y)
-            track.body_points = _translate_body_points(track.body_points, offset_x, offset_y)
+            track.body_points = _smooth_and_constrain_body(
+                track,
+                _translate_body_points(track.body_points, offset_x, offset_y),
+            )
             track.hands_by_side = track.pipeline.detect_hands(frame, track.body_points)
             track.joint_depths = dict(track.pipeline.last_joint_depths)
             track.detection_score *= self.config.hold_confidence_decay
@@ -422,7 +411,7 @@ class MultiPersonTracker:
 
     def _update_track_from_detection(self, track: PersonTrack, detection: PersonDetection, frame) -> None:
         previous_center = track.center
-        body_points = detection.body_points
+        body_points = _smooth_and_constrain_body(track, detection.body_points)
         hands_by_side = track.pipeline.detect_hands(frame, body_points)
         current_center = ((detection.box[0] + detection.box[2]) * 0.5, (detection.box[1] + detection.box[3]) * 0.5)
         track.velocity = (

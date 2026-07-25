@@ -148,8 +148,10 @@ def _process_chunk(config: PipelineConfig, spec: ChunkSpec) -> ChunkResult:
     from network.osc_sender import OSCSender
     from pipeline.pipeline import PoseHandPipeline
     from utils.bootstrap_paths import ensure_local_environment
+    from utils.logging import install_safe_stdio
     from utils.smoothing import LandmarkSmoother
 
+    install_safe_stdio()
     ensure_local_environment()
     config.enable_preview = False
     config.osc_enabled = False

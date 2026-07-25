@@ -29,3 +29,22 @@ def build_hand_box(
     x2 = min(frame_width, center_x + box_size // 2)
     y2 = min(frame_height, center_y + box_size // 2)
     return x1, y1, x2, y2
+
+
+def expand_box(
+    box: tuple[int, int, int, int],
+    frame_width: int,
+    frame_height: int,
+    scale: float = 1.25,
+) -> tuple[int, int, int, int]:
+    x1, y1, x2, y2 = box
+    center_x = (x1 + x2) * 0.5
+    center_y = (y1 + y2) * 0.5
+    half_width = max(1.0, (x2 - x1) * scale * 0.5)
+    half_height = max(1.0, (y2 - y1) * scale * 0.5)
+    return (
+        max(0, int(round(center_x - half_width))),
+        max(0, int(round(center_y - half_height))),
+        min(frame_width, int(round(center_x + half_width))),
+        min(frame_height, int(round(center_y + half_height))),
+    )

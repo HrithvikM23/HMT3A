@@ -165,6 +165,7 @@ The implementation is split across:
 ## `utils/normalize.py`
 
 - `build_hand_box`: Builds a wrist-centered square crop using the wrist-to-elbow direction, a configurable scale, a minimum size, and a forward shift.
+- `expand_box`: Expands a tracked crop around its center and clamps it to the frame for retry ordering.
 
 ## `utils/calibration.py`
 
@@ -209,7 +210,8 @@ The implementation is split across:
 ### Public Hand Utilities
 
 - `anchor_hand_to_wrist`: Translates detected hand points so the hand wrist aligns exactly with the tracked body wrist.
-- `is_hand_detection_valid`: Rejects hand outputs that are too far from the wrist, too sparse, too large relative to the forearm, or implausible in palm scale.
+- `is_hand_detection_valid`: Rejects hand outputs that are too far from the wrist, too sparse, too large relative to the forearm, or implausible in palm scale while recording rejection telemetry.
+- `pop_hand_rejection_telemetry`: Returns and clears accumulated hand rejection counters for periodic FPS-cadence logging.
 - `generate_default_hand`: Builds a synthetic 21-point hand from a wrist-elbow direction vector and a template scaled by forearm length.
 
 ## `utils/hand_constraints.py`
@@ -233,7 +235,7 @@ The implementation is split across:
 - `_project_local`: Projects a point into a hand-local lateral/forward basis.
 - `_unproject_local`: Converts hand-local coordinates back into image-space coordinates.
 - `_enforce_finger_lanes`: Prevents fingers from crossing into each other's lateral bands.
-- `enforce_hand_constraints`: Orchestrates the full hand-cleanup pass by applying radial, length, bend, and lane constraints.
+- `enforce_hand_constraints`: Orchestrates hand cleanup by applying radial, length, bend, and lane constraints, with a second pass only when the first pass meaningfully moved points.
 
 ## `utils/model_assets.py`
 
@@ -243,7 +245,7 @@ The implementation is split across:
 
 ### Model Asset Functions
 
-- `_download_to_path`: Downloads a model atomically through a `.part` temporary file.
+- `_download_to_path`: Downloads a model atomically through a unique `.part` temporary file with a 30-second network timeout.
 - `ensure_model_file`: Ensures a model described by `ModelSpec` exists in the project tree.
 - `ensure_body_model_file`: Resolves a body model path or downloads a known YOLO pose model into `models/body`.
 - `ensure_mediapipe_pose_model_file`: Stages a MediaPipe pose TFLite model in `models/body`.

@@ -24,6 +24,9 @@ ensure_local_environment()
 def _checked_config(builder, *args, **kwargs):
     try:
         return builder(*args, **kwargs)
+    except ValueError as exc:
+        log_error(str(exc))
+        raise SystemExit(1) from exc
     except OSError as exc:
         log_error(f"Could not prepare output paths: {exc}")
         raise SystemExit(1) from exc
@@ -88,7 +91,14 @@ def main() -> None:
         if not calibration_available():
             safe_print("Error: calibrated camera support is not installed in this runtime.")
             raise SystemExit(1)
-        output_path = args.calibration_output or (args.output_dir or assignments[0].source.parent if not isinstance(assignments[0].source, int) else None)
+        if args.calibration_output is not None:
+            output_path = args.calibration_output
+        elif args.output_dir is not None:
+            output_path = args.output_dir
+        elif not isinstance(assignments[0].source, int):
+            output_path = assignments[0].source.parent
+        else:
+            output_path = None
         if output_path is None:
             safe_print("Error: --calibration-output is required when calibrating from live camera indices.")
             raise SystemExit(1)
@@ -116,6 +126,15 @@ def main() -> None:
         report_path = saved_path.with_suffix(".quality.json")
         if report_path.exists():
             safe_print(f"Saved: {report_path}")
+        if args.triangulate_3d:
+            args.calibrate_cameras = False
+            args.calibration_3d = saved_path
+            safe_print("Calibration complete. Starting triangulation with the saved calibration file...")
+            if len(assignments) < 2:
+                safe_print("Error: triangulation needs at least two sources.")
+                raise SystemExit(1)
+            if not run_fused_assignments(assignments, args):
+                raise SystemExit(1)
         return
 
     if len(assignments) > 1:

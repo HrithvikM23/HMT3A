@@ -16,8 +16,8 @@ MAX_CHAIN_BEND_DEGREES = {
     "thumb": (65.0, 55.0, 50.0),
     "index": (75.0, 95.0, 80.0),
     "middle": (75.0, 100.0, 85.0),
-    "ring": (75.0, 95.0, 80.0),
-    "pinky": (80.0, 95.0, 80.0),
+    "ring": (90.0, 110.0, 95.0),
+    "pinky": (95.0, 110.0, 95.0),
 }
 
 MAX_RADIAL_MULTIPLIER = {
@@ -260,9 +260,19 @@ def enforce_hand_constraints(hand_points: list[Point]) -> list[Point]:
     for chain_name, chain_indices in FINGER_CHAINS:
         _enforce_chain_bend(constrained, chain_name, chain_indices)
     _enforce_finger_lanes(constrained)
+    if _max_point_movement(hand_points, constrained) <= 2.0:
+        return constrained
     _enforce_radial_limits(constrained, base_scale)
     _enforce_bone_lengths(constrained, base_scale)
     _enforce_chain_bend(constrained, "thumb", THUMB_CHAIN)
     for chain_name, chain_indices in FINGER_CHAINS:
         _enforce_chain_bend(constrained, chain_name, chain_indices)
     return constrained
+
+
+def _max_point_movement(original: list[Point], constrained: list[Point]) -> float:
+    distances = [
+        _distance(_point_xy(before), _point_xy(after))
+        for before, after in zip(original, constrained, strict=True)
+    ]
+    return max(distances, default=0.0)

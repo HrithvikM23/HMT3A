@@ -72,6 +72,7 @@ def fuse_smoothed_hands(
     camera_hands: Mapping[str, Mapping[str, HandPayload]],
     config: PipelineConfig,
     reference_label: str,
+    calibrations: Mapping[str, Mapping[str, float]] | None = None,
 ) -> dict[str, HandPayload]:
     fused_hands: dict[str, HandPayload] = {}
     for side in ("left", "right"):
@@ -80,7 +81,12 @@ def fuse_smoothed_hands(
             for label, hands_by_side in camera_hands.items()
             if side in hands_by_side
         }
-        fused_hand = fuse_hand_views(side_views, config.hand_kp_threshold, reference_label=reference_label)
+        fused_hand = fuse_hand_views(
+            side_views,
+            config.hand_kp_threshold,
+            reference_label=reference_label,
+            calibrations=calibrations,
+        )
         if fused_hand is None:
             continue
         smoothed_points = renderer.smoother.smooth_hand(side, fused_hand["points"])

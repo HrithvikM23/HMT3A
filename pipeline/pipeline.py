@@ -11,9 +11,10 @@ from utils.hand_fallback import (
     generate_default_hand,
     has_usable_hand_detection,
     is_hand_detection_valid,
+    pop_hand_rejection_telemetry,
 )
-from utils.hand_tracking import blend_with_prediction, hand_detection_score, predict_hand_payload
-from utils.normalize import build_hand_box
+from utils.hand_tracking import blend_with_prediction, hand_detection_score, hand_motion_delta, predict_hand_payload
+from utils.normalize import build_hand_box, expand_box
 from utils.payloads import HandPayload
 from utils.prediction import predict_points
 from utils.skeleton import HAND_NAME_TO_INDEX
@@ -30,11 +31,13 @@ class PoseHandPipeline:
         self._previous_body_points = None
         self._last_body_points = None
         self._last_hand_by_side = {}
+        self._last_hand_delta_by_side = {}
         self._last_wrist_by_side = {}
         self._last_elbow_by_side = {}
         self._body_constraints = BodyKinematicConstraints(config)
         self.last_joint_depths: dict[str, float] = {}
         self._processing_size_logged = False
+        self._last_hand_rejection_log_frame = 0
 
     def process_frame(self, frame):
         body_points, hands_by_side = self.detect_pose(frame)
@@ -159,6 +162,7 @@ class PoseHandPipeline:
             raw_hand_points = None
             raw_hand_depths = None
             raw_hand_in_inference_space = True
+            fallback_generated = False
             hand_box = box
             predicted_hand = self._predict_hand(side, wrist_output, elbow_output)
             if self.config.hand_backend == "rtmpose-wholebody":
@@ -201,17 +205,27 @@ class PoseHandPipeline:
                 hand_points = generate_default_hand(wrist_output, elbow_output, side, self.config)
                 hand_points = enforce_hand_constraints(hand_points)
                 hand_depths = None
+                fallback_generated = True
 
             payload: HandPayload = {"box": hand_box, "points": hand_points}
+            if fallback_generated:
+                payload["fallback"] = True
             if hand_depths is not None and len(hand_depths) == len(hand_points):
                 payload["depths"] = hand_depths
                 self._store_hand_depths(side, hand_depths)
             hands_by_side[side] = payload
             self._last_hand_by_side[side] = hands_by_side[side]
+            self._last_hand_delta_by_side[side] = hand_motion_delta(
+                self._last_wrist_by_side.get(side),
+                wrist_output,
+                self._last_elbow_by_side.get(side),
+                elbow_output,
+            )
             self._last_wrist_by_side[side] = wrist_output
             self._last_elbow_by_side[side] = elbow_output
 
         self._hand_frame_index += 1
+        self._log_hand_rejections()
         return hands_by_side
 
     def _store_hand_depths(self, side, hand_depths) -> None:
@@ -237,6 +251,7 @@ class PoseHandPipeline:
             self.config.hold_confidence_decay,
             self._last_elbow_by_side.get(side),
             elbow_point,
+            self._last_hand_delta_by_side.get(side),
         )
 
     def _detect_best_hand(self, frame, side, wrist_point, elbow_point, primary_box, output_scale=(1.0, 1.0)):
@@ -279,12 +294,15 @@ class PoseHandPipeline:
         if self.config.hand_backend == "mediapipe" and not self.config.enable_backend_fallbacks:
             return [primary_box]
 
-        boxes = [primary_box]
-        previous_box = None if side is None else self._last_hand_box_in_inference_space(side, output_scale)
+        boxes = []
+        previous_box = None if side is None else self._last_hand_box_in_inference_space(side, output_scale, wrist_point, elbow_point)
         if previous_box is not None:
-            boxes.append(self._clamp_box(previous_box, frame_width, frame_height))
-        retry_specs = ((2.4, 0.15), (2.8, 0.35), (3.2, 0.05))
-        for scale_multiplier, forward_shift in retry_specs[: self.config.hand_crop_retries]:
+            boxes.append(expand_box(self._clamp_box(previous_box, frame_width, frame_height), frame_width, frame_height, 1.25))
+        boxes.append(primary_box)
+        retry_count = max(0, self.config.hand_crop_retries)
+        for retry_index in range(retry_count):
+            scale_multiplier = 2.4 + retry_index * 0.4
+            forward_shift = (0.15, 0.35, 0.05)[retry_index % 3]
             boxes.append(
                 build_hand_box(
                     wrist_point,
@@ -313,32 +331,22 @@ class PoseHandPipeline:
         scale_x, scale_y = output_scale
         return self._scale_points(previous_payload["points"], 1.0 / scale_x, 1.0 / scale_y)
 
-    def _last_hand_box_in_inference_space(self, side, output_scale):
+    def _last_hand_box_in_inference_space(self, side, output_scale, wrist_point=None, elbow_point=None):
         previous_payload = self._last_hand_by_side.get(side)
         previous_wrist = self._last_wrist_by_side.get(side)
         if previous_payload is None or previous_wrist is None:
             return None
 
         scale_x, scale_y = output_scale
-        wrist_point = (
-            int(round(previous_wrist[0] / scale_x)),
-            int(round(previous_wrist[1] / scale_y)),
-            previous_wrist[2],
-        )
-        predicted = self._predict_hand(side, previous_wrist, self._last_elbow_by_side.get(side))
+        if wrist_point is None:
+            current_wrist = previous_wrist
+        else:
+            current_wrist = self._scale_point(wrist_point, scale_x, scale_y)
+        current_elbow = None if elbow_point is None else self._scale_point(elbow_point, scale_x, scale_y)
+        predicted = self._predict_hand(side, current_wrist, current_elbow)
         box = previous_payload["box"] if predicted is None else predicted[0]
         inference_box = self._scale_box(box, 1.0 / scale_x, 1.0 / scale_y)
-        x1, y1, x2, y2 = inference_box
-        center_x = (x1 + x2) * 0.5
-        center_y = (y1 + y2) * 0.5
-        delta_x = wrist_point[0] - ((x1 + x2) * 0.5)
-        delta_y = wrist_point[1] - ((y1 + y2) * 0.5)
-        return (
-            int(round(center_x + delta_x - (x2 - x1) * 0.5)),
-            int(round(center_y + delta_y - (y2 - y1) * 0.5)),
-            int(round(center_x + delta_x + (x2 - x1) * 0.5)),
-            int(round(center_y + delta_y + (y2 - y1) * 0.5)),
-        )
+        return inference_box
 
     @staticmethod
     def _clamp_box(box, frame_width, frame_height):
@@ -400,8 +408,15 @@ class PoseHandPipeline:
         for hand_payload in hands_by_side.values():
             x1, y1, x2, y2 = hand_payload["box"]
             hand_points = hand_payload["points"]
+            line_color = self.config.hand_line_color
+            point_color = self.config.hand_point_color
+            box_color = self.config.hand_box_color
+            if self.config.debug_fallback_hands and hand_payload.get("fallback"):
+                line_color = self.config.fallback_hand_color
+                point_color = self.config.fallback_hand_color
+                box_color = self.config.fallback_hand_color
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), self.config.hand_box_color, self.config.hand_box_thickness)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, self.config.hand_box_thickness)
 
             for start_idx, end_idx in HAND_EDGES:
                 x1p, y1p, c1 = hand_points[start_idx]
@@ -411,10 +426,24 @@ class PoseHandPipeline:
                         frame,
                         (x1p, y1p),
                         (x2p, y2p),
-                        self.config.hand_line_color,
+                        line_color,
                         self.config.hand_line_thickness,
                     )
 
             for px, py, conf in hand_points:
                 if conf > self.config.hand_kp_threshold:
-                    cv2.circle(frame, (px, py), self.config.hand_point_radius, self.config.hand_point_color, -1)
+                    cv2.circle(frame, (px, py), self.config.hand_point_radius, point_color, -1)
+
+    def _log_hand_rejections(self) -> None:
+        interval = float(getattr(self.config, "fps_log_interval", 0.0) or 0.0)
+        if interval <= 0:
+            return
+        frame_interval = max(1, int(round(interval * float(getattr(self.config, "fallback_fps", 30.0)))))
+        if self._frame_index - self._last_hand_rejection_log_frame < frame_interval:
+            return
+        telemetry = pop_hand_rejection_telemetry()
+        if not telemetry:
+            return
+        self._last_hand_rejection_log_frame = self._frame_index
+        details = ", ".join(f"{reason}={count}" for reason, count in sorted(telemetry.items()))
+        print(f"[hand fallback] rejected candidates: {details}")

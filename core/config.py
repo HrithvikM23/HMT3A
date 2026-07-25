@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -8,6 +9,15 @@ class LiveUdpDefaults:
     HOST = "127.0.0.1"
     PORT = 9000
     ENABLED = False
+
+
+def sanitize_output_basename(value: str) -> str:
+    cleaned = re.sub(r"[\\/]+", "_", value.strip())
+    cleaned = cleaned.replace("..", "_")
+    cleaned = re.sub(r"[\x00-\x1f<>:\"|?*]+", "_", cleaned)
+    cleaned = re.sub(r"_+", "_", cleaned).strip(" ._")
+    return cleaned or "kinara_output"
+
 
 @dataclass(slots=True)
 class PipelineConfig:
@@ -106,6 +116,8 @@ class PipelineConfig:
     hand_box_color: tuple[int, int, int] = (80, 80, 255)
     hand_line_color: tuple[int, int, int] = (0, 255, 255)
     hand_point_color: tuple[int, int, int] = (0, 165, 255)
+    fallback_hand_color: tuple[int, int, int] = (255, 0, 255)
+    debug_fallback_hands: bool = False
     body_line_thickness: int = 2
     body_point_radius: int = 4
     hand_box_thickness: int = 1
@@ -124,7 +136,7 @@ class PipelineConfig:
     metadata_output_path: Path = field(init=False)
 
     def __post_init__(self) -> None:
-        if self.body_model_path is not None and isinstance(self.body_model_path, Path):
+        if self.body_model_path is not None:
             self.body_model_path = Path(self.body_model_path)
 
         if self.hand_model_path is not None:
@@ -151,6 +163,8 @@ class PipelineConfig:
                 base_name = f"webcam_{self.video_path}"
         else:
             base_name = self.output_basename.strip()
+        base_name = sanitize_output_basename(base_name)
+        self.output_basename = base_name
 
         if self.output_path is not None:
             requested_output_path = Path(self.output_path)
@@ -160,10 +174,16 @@ class PipelineConfig:
             except OSError as exc:
                 raise RuntimeError(f"output directory could not be created: {self.output_directory} ({exc})") from exc
             resolved_output_directory = self.output_directory
-            base_name = requested_output_path.stem
+            base_name = sanitize_output_basename(requested_output_path.stem)
             self.video_extension = requested_output_path.suffix or ".mp4"
         else:
             self.video_extension = ".mp4"
+
+        output_fourcc = str(self.output_fourcc)
+        if len(output_fourcc) < 4:
+            raise ValueError(f"output FourCC must have at least 4 characters: {self.output_fourcc}")
+        if not re.fullmatch(r"[\x20-\x7e]+", output_fourcc):
+            raise ValueError(f"output FourCC must contain only printable ASCII characters: {self.output_fourcc}")
 
         self.run_index = self._next_run_index(base_name)
         self.rendered_output_path = resolved_output_directory / f"{base_name} rendered-{self.run_index}{self.video_extension}"
@@ -171,7 +191,7 @@ class PipelineConfig:
         self.json_output_path = resolved_output_directory / f"{base_name} json-{self.run_index}.json"
         self.metadata_output_path = resolved_output_directory / f"{base_name} metadata-{self.run_index}.json"
         self.output_path = self.rendered_output_path
-        self.output_fourcc = self.output_fourcc[:4].ljust(4)
+        self.output_fourcc = output_fourcc[:4].ljust(4)
 
     def _next_run_index(self, base_name: str) -> int:
         assert self.output_directory is not None

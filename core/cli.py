@@ -630,6 +630,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hand-box-color", type=parse_color, default=parse_color("80,80,255"), help="Hand box color as B,G,R.")
     parser.add_argument("--hand-line-color", type=parse_color, default=parse_color("0,255,255"), help="Hand skeleton color as B,G,R.")
     parser.add_argument("--hand-point-color", type=parse_color, default=parse_color("0,165,255"), help="Hand keypoint color as B,G,R.")
+    parser.add_argument("--fallback-hand-color", type=parse_color, default=parse_color("255,0,255"), help="Fallback hand color as B,G,R.")
+    parser.add_argument("--debug-fallback-hands", action="store_true", help="Draw generated fallback hands in a distinct debug color.")
     parser.add_argument("--body-line-thickness", type=int, default=2, help="Thickness of body skeleton lines.")
     parser.add_argument("--body-point-radius", type=int, default=4, help="Radius of body landmark points.")
     parser.add_argument("--hand-box-thickness", type=int, default=1, help="Thickness of the hand crop box.")

@@ -368,6 +368,8 @@ def _build_pipeline_config(
         hand_box_color=args.hand_box_color,
         hand_line_color=args.hand_line_color,
         hand_point_color=args.hand_point_color,
+        fallback_hand_color=args.fallback_hand_color,
+        debug_fallback_hands=args.debug_fallback_hands,
         body_line_thickness=args.body_line_thickness,
         body_point_radius=args.body_point_radius,
         hand_box_thickness=args.hand_box_thickness,

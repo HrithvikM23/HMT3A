@@ -151,6 +151,19 @@ class CoreLogicTests(unittest.TestCase):
         self.assertIn(str(app_main.PROJECT_ROOT / ".vendor_py311"), sys.path)
         self.assertEqual(os.environ.get("XDG_CACHE_HOME"), str(app_main.PROJECT_ROOT / ".kinara_runtime" / "cache"))
 
+    def test_safe_text_io_accepts_missing_windowed_stream(self) -> None:
+        from utils.logging import SafeTextIO, configure_run_log
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_path = configure_run_log(Path(tmp_dir) / "run.txt")
+            stream = SafeTextIO(None)
+
+            written = stream.write("worker message")
+            stream.flush()
+
+            self.assertEqual(written, 0)
+            self.assertIn("worker message", log_path.read_text(encoding="utf-8"))
+
     def test_pipeline_config_allocates_metadata_path(self) -> None:
         config = PipelineConfig(output_basename="metadata_test")
 
@@ -892,6 +905,46 @@ class CoreLogicTests(unittest.TestCase):
 
         self.assertEqual(joints["LeftWrist"]["z"], 123.0)
         self.assertEqual(joints["RightWrist"]["z"], -45.0)
+        self.assertNotEqual(joints["LeftElbow"]["z"], 0.0)
+
+    def test_hand_candidate_retries_extend_past_three(self) -> None:
+        short_retry_pipeline = PoseHandPipeline(
+            PipelineConfig(hand_backend="onnx", hand_crop_retries=3),
+            SimpleNamespace(),
+            SimpleNamespace(),
+            SimpleNamespace(),
+        )
+        long_retry_pipeline = PoseHandPipeline(
+            PipelineConfig(hand_backend="onnx", hand_crop_retries=5),
+            SimpleNamespace(),
+            SimpleNamespace(),
+            SimpleNamespace(),
+        )
+
+        short_retry_boxes = short_retry_pipeline._hand_candidate_boxes(
+            (320, 240, 0.9),
+            (270, 320, 0.9),
+            1280,
+            720,
+            (280, 200, 360, 280),
+        )
+        long_retry_boxes = long_retry_pipeline._hand_candidate_boxes(
+            (320, 240, 0.9),
+            (270, 320, 0.9),
+            1280,
+            720,
+            (280, 200, 360, 280),
+        )
+
+        self.assertGreater(len(long_retry_boxes), len(short_retry_boxes))
+        self.assertGreater(len(long_retry_boxes), 4)
+
+    def test_nested_relative_body_model_path_must_exist(self) -> None:
+        from utils.model_assets import ensure_body_model_file
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaises(FileNotFoundError):
+                ensure_body_model_file(Path(tmp_dir), "custom/my_model.pt")
 
     def test_export_cleanup_interpolates_missing_joint(self) -> None:
         config = PipelineConfig()
@@ -920,6 +973,37 @@ class CoreLogicTests(unittest.TestCase):
         score = color_profile_similarity({"orange": 0.8, "black": 0.2}, {"orange": 0.4, "blue": 0.6})
         self.assertAlmostEqual(score, 0.25)
         self.assertEqual(color_profile_similarity({}, {"orange": 1.0}), 0.0)
+
+    def test_multi_person_track_smooths_and_constrains_body_points(self) -> None:
+        from utils.multi_person import PersonDetection, PersonTrack, _smooth_and_constrain_body
+
+        raw_points = _body_points()
+        smoothed_points = [(x + 1, y + 1, conf) for x, y, conf in raw_points]
+        constrained_points = [(x + 2, y + 2, conf) for x, y, conf in smoothed_points]
+
+        class FakeSmoother:
+            def smooth_body(self, points):
+                self.received_points = points
+                return smoothed_points
+
+        class FakeConstraints:
+            def apply(self, points):
+                self.received_points = points
+                return constrained_points
+
+        pipeline = SimpleNamespace(
+            smoother=FakeSmoother(),
+            _body_constraints=FakeConstraints(),
+            detect_hands=lambda frame, points: {},
+            last_joint_depths={},
+        )
+        track = PersonTrack(id=1, box=(0, 0, 10, 10), pipeline=pipeline)
+
+        body_points = _smooth_and_constrain_body(track, raw_points)
+
+        self.assertIs(body_points, constrained_points)
+        self.assertIs(pipeline.smoother.received_points, raw_points)
+        self.assertIs(pipeline._body_constraints.received_points, smoothed_points)
 
     def test_align_people_across_cameras_prefers_labels_then_color(self) -> None:
         front = SimpleNamespace(
@@ -1151,6 +1235,35 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(left_shoulder["x"], 105.0)
         self.assertEqual(left_shoulder["z"], 42.0)
         self.assertGreater(result.triangulated_point_count, 0)
+
+    def test_triangulation_rejects_extra_calibration_cameras_without_subset_support(self) -> None:
+        import utils.triangulation as triangulation
+
+        class FakeCameraGroup:
+            def get_names(self):
+                return ["CAM_0", "CAM_1"]
+
+        original_loader = triangulation._load_camera_group
+        triangulation._load_camera_group = lambda _: FakeCameraGroup()
+        try:
+            with self.assertRaisesRegex(ValueError, "cannot subset cameras"):
+                triangulate_observation_frames(
+                    Path("calibration.toml"),
+                    [{
+                        "camera_bodies": {
+                            "CAM_0": _body_points(),
+                        },
+                        "camera_hands": {},
+                    }],
+                    body_threshold=0.1,
+                    hand_threshold=0.1,
+                    minimum_cameras=2,
+                    use_outlier_rejection=False,
+                    maximum_cameras_to_drop=1,
+                    target_reprojection_error=0.01,
+                )
+        finally:
+            triangulation._load_camera_group = original_loader
 
     def test_freemocap_style_output_writes_calibrated_arrays(self) -> None:
         from utils.triangulation import TriangulationResult, export_freemocap_style_output

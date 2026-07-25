@@ -42,19 +42,27 @@ class VideoInputSource:
 class VideoOutputWriter:
     def __init__(self, output_path: Path, frame_width: int, frame_height: int, fps: float, output_fourcc: str = "mp4v"):
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.output_path = output_path
+        self.output_fourcc = output_fourcc[:4].ljust(4)
         fourcc = cv2.VideoWriter.fourcc(*output_fourcc[:4].ljust(4))
         self.writer = cv2.VideoWriter(str(output_path), fourcc, fps, (frame_width, frame_height))
-        if not self.writer.isOpened():
+        if self.writer is None or not self.writer.isOpened():
             raise RuntimeError(
                 f"Could not open video writer: {output_path}. Check that the directory is writable and FourCC "
                 f"'{output_fourcc[:4].ljust(4)}' is supported for this output extension."
             )
 
     def write(self, frame) -> None:
+        if self.writer is None:
+            raise RuntimeError(
+                f"Video writer is not available for {self.output_path}. FourCC '{self.output_fourcc}' may not be usable "
+                "in this runtime."
+            )
         self.writer.write(frame)
 
     def close(self) -> None:
-        self.writer.release()
+        if self.writer is not None:
+            self.writer.release()
 
 
 class VideoCaptureSession:

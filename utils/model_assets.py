@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import shutil
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import urlopen
@@ -71,10 +73,10 @@ MEDIAPIPE_HAND_ASSETS = (
 
 def _download_to_path(source_url: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = destination.with_suffix(destination.suffix + ".part")
+    temp_path = destination.with_suffix(f"{destination.suffix}.{os.getpid()}.{uuid.uuid4().hex}.part")
 
     try:
-        with urlopen(source_url) as response, temp_path.open("wb") as output_file:
+        with urlopen(source_url, timeout=30) as response, temp_path.open("wb") as output_file:
             while True:
                 chunk = response.read(1024 * 1024)
                 if not chunk:
@@ -98,8 +100,15 @@ def ensure_model_file(project_root: Path, spec: ModelSpec) -> Path:
 
 def ensure_body_model_file(project_root: Path, model_name_or_path: str) -> Path:
     candidate_path = Path(model_name_or_path)
-    if candidate_path.is_absolute() or candidate_path.parent != Path("."):
+    if candidate_path.is_absolute():
+        if not candidate_path.exists():
+            raise FileNotFoundError(f"body model file not found: {candidate_path}")
         return candidate_path
+    if candidate_path.parent != Path("."):
+        resolved_path = project_root / candidate_path
+        if not resolved_path.exists():
+            raise FileNotFoundError(f"body model file not found: {resolved_path}")
+        return resolved_path
 
     destination = project_root / "models" / "body" / candidate_path.name
     if destination.exists():

@@ -46,25 +46,31 @@ def _write_log_line(text: str) -> None:
 
 
 class SafeTextIO:
-    def __init__(self, wrapped: TextIO) -> None:
+    def __init__(self, wrapped: TextIO | None) -> None:
         self._wrapped = wrapped
 
     def write(self, text: str) -> int:
-        try:
-            written = self._wrapped.write(text)
-        except OSError:
-            written = 0
+        written = 0
+        if self._wrapped is not None:
+            try:
+                written = self._wrapped.write(text)
+            except OSError:
+                written = 0
         if text:
             _write_log_line(text)
         return written
 
     def flush(self) -> None:
+        if self._wrapped is None:
+            return
         try:
             self._wrapped.flush()
         except OSError:
             return
 
     def __getattr__(self, name: str) -> object:
+        if self._wrapped is None:
+            raise AttributeError(name)
         return getattr(self._wrapped, name)
 
 

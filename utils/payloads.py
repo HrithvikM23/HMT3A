@@ -11,6 +11,7 @@ class HandPayload(TypedDict):
     box: Box
     points: list[Point]
     depths: NotRequired[list[float]]
+    fallback: NotRequired[bool]
 
 
 class PersonPayload(TypedDict, total=False):
