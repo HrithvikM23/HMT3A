@@ -320,8 +320,8 @@ Launcher tabs:
 
 - Capture: local camera input for quick tests.
 - Files: recorded source selection and output destination.
-- Presets: one-click setups for demo, quality export, multi-person, RTMPose, and ChArUco calibration situations.
-- Calibration: camera calibration workflow for synchronized ChArUco videos, including output path selection and A3/Rescue board presets.
+- Presets: one-click setups plus model-weight controls for ONNX hands, MediaPipe, RTMPose, RTMPose WholeBody, YOLO, and hybrid runs.
+- Calibration: camera calibration workflow for synchronized ChArUco videos, including output path selection, A3/A4/Letter/Legal paper sizing, Rescue board detection, and optional Instant Triangulation.
 - Triangulation: calibrated 3D triangulation workflow with a browse button for `.toml` or `.json` calibration files.
 - Tune: advanced CLI-backed controls, including Runtime people count, identity color hints, Python runtime selection, model/backend options, ChArUco detector tuning, triangulation tuning, smoothing, cleanup, and output settings.
 
@@ -331,6 +331,7 @@ Global launcher controls:
 - Reset button: restores launcher defaults without clearing selected source files.
 - Check Runtime: installs/checks selected runtime dependencies and prepares selected model assets.
 - Start: runs the selected workflow directly and skips runtime bootstrap so demo starts are faster after Check Runtime has been used.
+- Command: shows the generated runner command. Edit it when you want to paste or test CLI flags directly from the launcher.
 
 The launcher runs the existing Kinara pipeline underneath, so CLI behavior and GUI behavior stay aligned.
 
