@@ -89,7 +89,10 @@ def choose_video_gui(title: str = "Select Video File") -> str | None:
 
 def choose_camera_assignments_gui() -> list[InputAssignment]:
     print("How many cameras do you want to assign?")
-    count_raw = input("Enter camera count [1-4]: ").strip()
+    try:
+        count_raw = input("Enter camera count [1-4]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        count_raw = "1"
     camera_count = int(count_raw) if count_raw.isdigit() else 1
     camera_count = max(1, min(4, camera_count))
 
@@ -126,25 +129,34 @@ def resolve_sources(args: argparse.Namespace) -> list[InputAssignment]:
                 return []
             used_labels.add(label)
 
+            path = Path(value_text)
+            if path.exists():
+                assignments.append(InputAssignment(label=label, source=path))
+                continue
+
             if value_text.isdigit():
                 assignments.append(InputAssignment(label=label, source=int(value_text)))
                 continue
 
-            path = Path(value_text)
-            if not path.exists():
-                print(f"Error: file not found: {path}")
-                return []
-            assignments.append(InputAssignment(label=label, source=path))
+            print(f"Error: file not found: {path}")
+            return []
 
         return assignments
 
     print("Select input source:")
     print("  1. Webcam")
     print("  2. Video file(s)")
-    choice = input("Enter choice [1/2]: ").strip()
+    try:
+        choice = input("Enter choice [1/2]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("Non-interactive mode detected.")
+        return []
 
     if choice == "1":
-        idx = input("Webcam index: ").strip()
+        try:
+            idx = input("Webcam index: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            idx = "0"
         return [InputAssignment(label=default_camera_label(0), source=int(idx) if idx.isdigit() else 0)]
 
     if choice == "2":
@@ -199,6 +211,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="Stop after N processed frames and print run timing. 0 processes the full source.",
+    )
+    parser.add_argument(
+        "--execution-mode",
+        choices=("auto", "serial", "parallel"),
+        default="auto",
+        help="Single-person processing mode: auto (smart parallel detection), serial (force single-core), parallel (force multi-process).",
     )
     parser.add_argument(
         "--parallel-workers",

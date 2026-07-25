@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import urlopen
 
 from core.mediapipe_models import mediapipe_pose_model_names, normalize_mediapipe_pose_model
+from utils.bootstrap_state import LOCAL_MODELS_DIR
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,8 +96,14 @@ def ensure_model_file(project_root: Path, spec: ModelSpec) -> Path:
     if destination.exists():
         return destination
 
-    _download_to_path(spec.source_url, destination)
-    return destination
+    rel = spec.relative_path.relative_to("models") if spec.relative_path.parts[0] == "models" else spec.relative_path
+    local_dest = LOCAL_MODELS_DIR / rel
+    if local_dest.exists():
+        return local_dest
+
+    target = LOCAL_MODELS_DIR / rel if getattr(sys, "frozen", False) else destination
+    _download_to_path(spec.source_url, target)
+    return target
 
 
 def ensure_body_model_file(project_root: Path, model_name_or_path: str) -> Path:
@@ -106,20 +114,27 @@ def ensure_body_model_file(project_root: Path, model_name_or_path: str) -> Path:
         return candidate_path
     if candidate_path.parent != Path("."):
         resolved_path = project_root / candidate_path
-        if not resolved_path.exists():
-            raise FileNotFoundError(f"body model file not found: {resolved_path}")
-        return resolved_path
+        if resolved_path.exists():
+            return resolved_path
+        local_resolved = LOCAL_MODELS_DIR / candidate_path
+        if local_resolved.exists():
+            return local_resolved
+        raise FileNotFoundError(f"body model file not found: {resolved_path}")
 
     destination = project_root / "models" / "body" / candidate_path.name
     if destination.exists():
         return destination
+    local_dest = LOCAL_MODELS_DIR / "body" / candidate_path.name
+    if local_dest.exists():
+        return local_dest
 
     source_url = BODY_MODEL_URLS.get(candidate_path.name)
     if source_url is None:
         return destination
 
-    _download_to_path(source_url, destination)
-    return destination
+    target = LOCAL_MODELS_DIR / "body" / candidate_path.name if getattr(sys, "frozen", False) else destination
+    _download_to_path(source_url, target)
+    return target
 
 
 def _installed_mediapipe_asset_path(module_name: str, asset_name: str) -> Path | None:
@@ -149,20 +164,29 @@ def ensure_mediapipe_pose_model_file(project_root: Path, model_name_or_path: str
     destination = project_root / "models" / "body" / model_name
     if destination.exists():
         return destination
+    local_dest = LOCAL_MODELS_DIR / "body" / model_name
+    if local_dest.exists():
+        return local_dest
 
-    if _copy_if_present(_installed_mediapipe_asset_path("pose_landmark", model_name), destination):
-        return destination
+    target = LOCAL_MODELS_DIR / "body" / model_name if getattr(sys, "frozen", False) else destination
 
-    _download_to_path(MEDIAPIPE_POSE_MODEL_URLS[model_name], destination)
-    return destination
+    if _copy_if_present(_installed_mediapipe_asset_path("pose_landmark", model_name), target):
+        return target
+
+    _download_to_path(MEDIAPIPE_POSE_MODEL_URLS[model_name], target)
+    return target
 
 
 def ensure_mediapipe_hand_asset_files(project_root: Path) -> tuple[Path, ...]:
     staged_paths: list[Path] = []
     for module_name, asset_name in MEDIAPIPE_HAND_ASSETS:
         destination = project_root / "models" / "hand" / "mediapipe" / asset_name
-        if not destination.exists():
-            _copy_if_present(_installed_mediapipe_asset_path(module_name, asset_name), destination)
+        local_dest = LOCAL_MODELS_DIR / "hand" / "mediapipe" / asset_name
+        target = LOCAL_MODELS_DIR / "hand" / "mediapipe" / asset_name if getattr(sys, "frozen", False) else destination
+        if not destination.exists() and not local_dest.exists():
+            _copy_if_present(_installed_mediapipe_asset_path(module_name, asset_name), target)
         if destination.exists():
             staged_paths.append(destination)
+        elif local_dest.exists():
+            staged_paths.append(local_dest)
     return tuple(staged_paths)

@@ -227,7 +227,7 @@ def _csv_float(value: float) -> str:
 
 def _load_camera_group_class():
     try:
-        from aniposelib.cameras import CameraGroup
+        from aniposelib.cameras import CameraGroup  # type: ignore[import-not-found]
     except ModuleNotFoundError:
         raise
     return CameraGroup
@@ -379,23 +379,56 @@ def _full_reprojection_error(
         full_error = np.asarray(camera_group.reprojection_error(points_3d_flat, flat_points, mean=False))
     except (AttributeError, NotImplementedError, TypeError):
         return None
-    if full_error.ndim == 3 and full_error.shape[-1] == 2:
-        full_error = np.linalg.norm(full_error, axis=2)
-    return full_error.reshape(flat_points.shape[0], frame_count, tracked_point_count)
+    if full_error.size == flat_points.shape[0] * frame_count * tracked_point_count:
+        return full_error.reshape(flat_points.shape[0], frame_count, tracked_point_count)
+    return None
 
 
 def _smooth_points_3d(points_3d: np.ndarray, confidences: np.ndarray, smoothing_alpha: float) -> np.ndarray:
     alpha = max(0.0, min(float(smoothing_alpha), 1.0))
-    if alpha >= 1.0:
-        return points_3d
     smoothed = points_3d.copy()
+    
     for joint_index in range(points_3d.shape[1]):
-        previous: np.ndarray | None = None
+        last_valid = -1
         for frame_index in range(points_3d.shape[0]):
             current = points_3d[frame_index, joint_index]
-            if not np.all(np.isfinite(current)):
-                continue
-            if confidences[frame_index, joint_index] <= 0:
+            is_valid = np.all(np.isfinite(current)) and confidences[frame_index, joint_index] > 0
+            
+            if is_valid:
+                if last_valid != -1 and frame_index - last_valid > 1:
+                    gap_length = frame_index - last_valid - 1
+                    if gap_length <= 5:
+                        start_pos = points_3d[last_valid, joint_index]
+                        end_pos = points_3d[frame_index, joint_index]
+                        for gap_idx in range(last_valid + 1, frame_index):
+                            frac = (gap_idx - last_valid) / (gap_length + 1)
+                            smoothed[gap_idx, joint_index] = start_pos * (1 - frac) + end_pos * frac
+                    else:
+                        for gap_idx in range(last_valid + 1, frame_index):
+                            confidences[gap_idx, joint_index] = 0.0
+                last_valid = frame_index
+                
+        if last_valid != -1 and last_valid < points_3d.shape[0] - 1:
+            for gap_idx in range(last_valid + 1, points_3d.shape[0]):
+                confidences[gap_idx, joint_index] = 0.0
+                
+        first_valid = next((i for i in range(points_3d.shape[0]) if np.all(np.isfinite(points_3d[i, joint_index])) and confidences[i, joint_index] > 0), -1)
+        if first_valid == -1:
+            for gap_idx in range(points_3d.shape[0]):
+                confidences[gap_idx, joint_index] = 0.0
+        elif first_valid > 0:
+            for gap_idx in range(first_valid):
+                confidences[gap_idx, joint_index] = 0.0
+
+    if alpha >= 1.0:
+        return smoothed
+
+    for joint_index in range(smoothed.shape[1]):
+        previous: np.ndarray | None = None
+        for frame_index in range(smoothed.shape[0]):
+            current = smoothed[frame_index, joint_index]
+            if not np.all(np.isfinite(current)) or confidences[frame_index, joint_index] <= 0:
+                previous = None
                 continue
             if previous is None:
                 previous = current.copy()
@@ -403,6 +436,7 @@ def _smooth_points_3d(points_3d: np.ndarray, confidences: np.ndarray, smoothing_
             blended = previous * (1.0 - alpha) + current * alpha
             smoothed[frame_index, joint_index] = blended
             previous = blended
+
     return smoothed
 
 

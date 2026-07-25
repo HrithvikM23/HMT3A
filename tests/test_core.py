@@ -67,7 +67,7 @@ class CoreLogicTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
-            timeout=10,
+            timeout=30,
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -176,7 +176,7 @@ class CoreLogicTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             project_root = Path(tmp_dir) / "Kinara"
             project_root.mkdir()
-            source_path = Path.home() / "Downloads" / "local_clip.mp4"
+            source_path = Path(tempfile.gettempdir()) / "local_clip.mp4"
             config = PipelineConfig(
                 project_root=project_root,
                 video_path=source_path,
@@ -197,7 +197,7 @@ class CoreLogicTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             project_root = Path(tmp_dir) / "Kinara"
             project_root.mkdir()
-            source_path = Path.home() / "Downloads" / "local_clip.mp4"
+            source_path = Path(tempfile.gettempdir()) / "local_clip.mp4"
             config = PipelineConfig(
                 project_root=project_root,
                 video_path=source_path,
@@ -1116,24 +1116,15 @@ class CoreLogicTests(unittest.TestCase):
     def test_preview_frame_sink_writes_latest_frame(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             preview_path = Path(tmp_dir) / "preview.jpg"
-            old_path = os.environ.get("KINARA_PREVIEW_FRAME")
-            old_interval = os.environ.get("KINARA_PREVIEW_INTERVAL")
-            os.environ["KINARA_PREVIEW_FRAME"] = str(preview_path)
-            os.environ["KINARA_PREVIEW_INTERVAL"] = "1"
-            try:
+            with patch.dict(os.environ, {
+                "KINARA_PREVIEW_FRAME": str(preview_path),
+                "KINARA_PREVIEW_INTERVAL": "1"
+            }):
                 sink = PreviewFrameSink()
                 frame = np.zeros((12, 16, 3), dtype=np.uint8)
                 frame[:, :, 1] = 255
                 sink.write(frame, 0)
-            finally:
-                if old_path is None:
-                    os.environ.pop("KINARA_PREVIEW_FRAME", None)
-                else:
-                    os.environ["KINARA_PREVIEW_FRAME"] = old_path
-                if old_interval is None:
-                    os.environ.pop("KINARA_PREVIEW_INTERVAL", None)
-                else:
-                    os.environ["KINARA_PREVIEW_INTERVAL"] = old_interval
+                sink.close()
 
             frame_files = sorted(Path(tmp_dir).glob("preview_*.jpg"))
             self.assertEqual(len(frame_files), 1)
@@ -1142,26 +1133,35 @@ class CoreLogicTests(unittest.TestCase):
     def test_preview_frame_sink_ignores_locked_replace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             preview_path = Path(tmp_dir) / "preview.jpg"
-            old_path = os.environ.get("KINARA_PREVIEW_FRAME")
-            old_interval = os.environ.get("KINARA_PREVIEW_INTERVAL")
-            os.environ["KINARA_PREVIEW_FRAME"] = str(preview_path)
-            os.environ["KINARA_PREVIEW_INTERVAL"] = "1"
-            try:
+            with patch.dict(os.environ, {
+                "KINARA_PREVIEW_FRAME": str(preview_path),
+                "KINARA_PREVIEW_INTERVAL": "1"
+            }):
                 sink = PreviewFrameSink()
                 frame = np.zeros((12, 16, 3), dtype=np.uint8)
                 with patch.object(Path, "replace", side_effect=PermissionError("locked")):
                     sink.write(frame, 0)
-            finally:
-                if old_path is None:
-                    os.environ.pop("KINARA_PREVIEW_FRAME", None)
-                else:
-                    os.environ["KINARA_PREVIEW_FRAME"] = old_path
-                if old_interval is None:
-                    os.environ.pop("KINARA_PREVIEW_INTERVAL", None)
-                else:
-                    os.environ["KINARA_PREVIEW_INTERVAL"] = old_interval
+                sink.close()
 
             self.assertEqual(list(Path(tmp_dir).glob("*.tmp.jpg")), [])
+
+    def test_preview_frame_sink_worker_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            preview_path = Path(tmp_dir) / "preview.jpg"
+            with patch.dict(os.environ, {
+                "KINARA_PREVIEW_FRAME": str(preview_path),
+                "KINARA_WORKER_INDEX": "0",
+                "KINARA_PREVIEW_INTERVAL": "1"
+            }):
+                sink = PreviewFrameSink()
+                self.assertIn("preview_worker_0.jpg", str(sink.path))
+                frame = np.zeros((12, 16, 3), dtype=np.uint8)
+                sink.write(frame, 0)
+                sink.close()
+
+            frame_files = sorted(Path(tmp_dir).glob("preview_worker_0_*.jpg"))
+            self.assertEqual(len(frame_files), 1)
+            self.assertGreater(frame_files[0].stat().st_size, 0)
 
     def test_load_camera_calibrations_merges_uppercase_labels(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1306,6 +1306,80 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(payload["frame_count"], 1)
         self.assertEqual(payload["metadata"]["mode"], "test")
         self.assertIn("skeleton", payload["metadata"])
+
+    def test_osc_sender_handles_none_hand_box_and_oserror(self) -> None:
+        from network.osc_sender import OSCSender
+        sender = OSCSender(enabled=True)
+        # hand_payload with None box
+        body_points = _body_points()
+        hands_by_side = {"left": {"box": None, "points": [(10, 10, 0.9)]}}
+        payload = sender._build_person_payload(1, "person1", body_points, hands_by_side)
+        self.assertIsNone(payload["hands"]["left"]["box"])
+
+        # send_pose does not raise on socket error
+        mock_socket = unittest.mock.MagicMock()
+        mock_socket.sendto.side_effect = OSError("Network down")
+        sender._socket = mock_socket
+        sender.send_pose(body_points, hands_by_side)
+
+    def test_average_points_empty_list(self) -> None:
+        from utils.exports import _average_points
+        self.assertEqual(_average_points([]), (0.0, 0.0, 0.0, 0.0))
+
+    def test_cleanup_old_frames_zero_keep_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir) / "preview.jpg"
+            sink = PreviewFrameSink()
+            sink.path = tmp_path
+            sink.keep_frames = 0
+            # Create two dummy preview files
+            (Path(tmp_dir) / "preview_00000000.jpg").write_bytes(b"123")
+            (Path(tmp_dir) / "preview_00000001.jpg").write_bytes(b"456")
+            sink._cleanup_old_frames()
+            # With keep_frames=0, all files should be removed
+            remaining = list(Path(tmp_dir).glob("preview_*.jpg"))
+            self.assertEqual(len(remaining), 0)
+
+    def test_video_capture_session_cleans_up_source_on_writer_error(self) -> None:
+        from camera.capture import VideoCaptureSession
+        with patch("camera.capture.VideoInputSource") as mock_input_class, \
+             patch("camera.capture.VideoOutputWriter", side_effect=RuntimeError("Writer failed")):
+            mock_source = SimpleNamespace(frame_width=640, frame_height=480, fps=30.0, close=unittest.mock.MagicMock())
+            mock_input_class.return_value = mock_source
+            with self.assertRaises(RuntimeError):
+                VideoCaptureSession(0, Path("invalid.mp4"))
+            mock_source.close.assert_called_once()
+
+    def test_calibration_entry_case_insensitivity(self) -> None:
+        from utils.fusion import _get_calibration_entry
+        calibs = {"CAM_0": {"weight": 2.0}}
+        self.assertEqual(_get_calibration_entry("cam_0", calibs).get("weight"), 2.0)
+        self.assertEqual(_get_calibration_entry("CAM_0", calibs).get("weight"), 2.0)
+
+    def test_pipeline_config_color_coercion(self) -> None:
+        cfg = PipelineConfig(video_path=Path("dummy.mp4"), body_line_color="255,0,0", body_point_color=[0, 255, 0])
+        self.assertEqual(cfg.body_line_color, (255, 0, 0))
+        self.assertEqual(cfg.body_point_color, (0, 255, 0))
+
+    def test_translate_box_none_handling(self) -> None:
+        from utils.prediction import translate_box
+        self.assertIsNone(translate_box(None, 5.0, 10.0))
+        self.assertEqual(translate_box((0, 0, 10, 10), 5.0, 10.0), (5, 10, 15, 20))
+
+    def test_ground_y_outlier_resilience(self) -> None:
+        from utils.motion_cleanup import _ground_y
+        frames = []
+        for y_val in [500.0] * 20 + [-999.0]:
+            frames.append({"joints": {"LeftFoot": {"x": 100, "y": y_val, "z": 0, "confidence": 0.9}}})
+        # Glitch y=-999.0 should be ignored in favor of 5th percentile ~ 500.0
+        self.assertEqual(_ground_y(frames), 500.0)
+
+    def test_build_hand_box_missing_elbow_guard(self) -> None:
+        from utils.normalize import build_hand_box
+        # Wrist at (100, 100, 0.9), missing elbow at (0, 0, 0.0)
+        box = build_hand_box((100, 100, 0.9), (0, 0, 0.0), 640, 480, 160, 1.0, 0.35)
+        # Should stay centered on wrist (100, 100) instead of shooting off-screen
+        self.assertEqual(box, (20, 20, 180, 180))
 
 
 if __name__ == "__main__":

@@ -100,6 +100,7 @@ class PipelineConfig:
     fps_log_interval: float = 0.0
     fps_overlay_enabled: bool = True
     benchmark_frames: int = 0
+    execution_mode: str = "auto"
     parallel_workers: int = 0
     parallel_chunk_seconds: float = 5.0
     parallel_overlap_seconds: float = 0.5
@@ -144,6 +145,26 @@ class PipelineConfig:
 
         if self.mediapipe_pose_model_path is not None:
             self.mediapipe_pose_model_path = Path(self.mediapipe_pose_model_path)
+
+        if self.camera_calibration_path is not None:
+            self.camera_calibration_path = Path(self.camera_calibration_path)
+
+        if self.calibration_3d_path is not None:
+            self.calibration_3d_path = Path(self.calibration_3d_path)
+
+        def _coerce_color(val: Any) -> tuple[int, int, int]:
+            if isinstance(val, (list, tuple)) and len(val) == 3:
+                return (int(val[0]), int(val[1]), int(val[2]))
+            if isinstance(val, str):
+                parts = [int(v.strip()) for v in val.split(",") if v.strip().isdigit()]
+                if len(parts) == 3:
+                    return (parts[0], parts[1], parts[2])
+            return val if isinstance(val, tuple) else (0, 255, 0)
+
+        self.body_line_color = _coerce_color(self.body_line_color)
+        self.body_point_color = _coerce_color(self.body_point_color)
+        self.hand_line_color = _coerce_color(self.hand_line_color)
+        self.hand_point_color = _coerce_color(self.hand_point_color)
 
         if self.output_directory is None:
             output_directory = self.project_root / "outputs"

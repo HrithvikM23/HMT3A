@@ -6,10 +6,16 @@ from pathlib import Path
 
 from utils.logging import safe_print
 
-PROJECT_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
-VENDOR_DIR = PROJECT_ROOT / f".vendor_py{sys.version_info.major}{sys.version_info.minor}"
-ULTRALYTICS_CONFIG_DIR = PROJECT_ROOT / ".ultralytics"
-RUNTIME_CACHE_DIR = PROJECT_ROOT / ".kinara_runtime" / "cache"
+IS_FROZEN = getattr(sys, "frozen", False)
+EXE_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else Path(__file__).resolve().parent.parent
+RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", str(EXE_DIR))) if IS_FROZEN else Path(__file__).resolve().parent.parent
+
+PROJECT_ROOT = RESOURCE_ROOT
+LOCAL_RUNTIME_DIR = EXE_DIR / ".kinara_runtime"
+LOCAL_MODELS_DIR = LOCAL_RUNTIME_DIR / "models"
+VENDOR_DIR = (LOCAL_RUNTIME_DIR if IS_FROZEN else PROJECT_ROOT) / f".vendor_py{sys.version_info.major}{sys.version_info.minor}"
+ULTRALYTICS_CONFIG_DIR = (LOCAL_RUNTIME_DIR if IS_FROZEN else PROJECT_ROOT) / ".ultralytics"
+RUNTIME_CACHE_DIR = (LOCAL_RUNTIME_DIR if IS_FROZEN else PROJECT_ROOT) / ".kinara_runtime" / "cache"
 
 REQUIRED_PROJECT_FILES = (
     Path("app") / "main.py",

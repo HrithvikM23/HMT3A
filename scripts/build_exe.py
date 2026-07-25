@@ -15,7 +15,7 @@ DIST_ROOT = ARTIFACTS_ROOT / "windows"
 BUILD_ROOT = ARTIFACTS_ROOT / "pyinstaller" / "build"
 SPEC_ROOT = ARTIFACTS_ROOT / "pyinstaller" / "spec"
 BUNDLE_MODELS = Path(tempfile.gettempdir()) / "kinara_bundle_models"
-BUILT_LAUNCHER = DIST_ROOT / "Kinara" / "Kinara.exe"
+BUILT_LAUNCHER = DIST_ROOT / "Kinara.exe"
 
 
 def _run(command: list[str]) -> str:
@@ -100,9 +100,7 @@ def build() -> None:
     os.environ.pop("PYTHONNOUSERSITE", None)
     print(f"Using Python: {python.name}")
     pyinstaller_version = _run([str(python), "-m", "PyInstaller", "--version"])
-    pyside_version = _run([str(python), "-c", "import PySide6; print(PySide6.__version__)"])
     print(f"Using PyInstaller: {pyinstaller_version}")
-    print(f"Using PySide6: {pyside_version}")
 
     if BUNDLE_MODELS.exists():
         shutil.rmtree(BUNDLE_MODELS)
@@ -113,6 +111,7 @@ def build() -> None:
     args = [
         "--noconfirm",
         "--clean",
+        "--onefile",
         "--windowed",
         "--name", "Kinara",
         "--distpath", str(DIST_ROOT),
@@ -132,6 +131,7 @@ def build() -> None:
         "--exclude-module", "pandas",
         "--exclude-module", "scipy",
         "--exclude-module", "matplotlib",
+        "--hidden-import", "webview",
         "--hidden-import", "plistlib",
         "--hidden-import", "timeit",
         "--hidden-import", "zoneinfo",
@@ -141,13 +141,20 @@ def build() -> None:
     ]
 
     try:
-        collect_model_bundle(args)
+        if os.environ.get("KINARA_BUNDLE_HEAVY_MODELS") == "1":
+            print("Bundling pre-downloaded model weights into executable...")
+            collect_model_bundle(args)
+        else:
+            print("Building ultra-lightweight executable (models will be downloaded on-demand into .kinara_runtime)...")
         ultralytics_config = PROJECT_ROOT / ".ultralytics"
         if ultralytics_config.exists():
             args.extend(["--add-data", f"{ultralytics_config};.ultralytics"])
         assets_root = PROJECT_ROOT / "assets"
         if assets_root.exists():
             args.extend(["--add-data", f"{assets_root};assets"])
+        ui_root = PROJECT_ROOT / "app" / "ui"
+        if ui_root.exists():
+            args.extend(["--add-data", f"{ui_root};app/ui"])
         icon_path = PROJECT_ROOT / "assets" / "kinara.ico"
         if icon_path.exists():
             args.extend(["--icon", str(icon_path)])

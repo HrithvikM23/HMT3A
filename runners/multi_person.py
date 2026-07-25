@@ -93,7 +93,10 @@ def run_multi_person_assignment(config: PipelineConfig) -> bool:
     finally:
         session.close()
         osc_sender.close()
-        cv2.destroyAllWindows()
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
 
     cleaned_motion_frames = cleanup_multi_person_frames(motion_frames, config)
     export_metadata = {

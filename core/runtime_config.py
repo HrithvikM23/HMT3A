@@ -42,6 +42,7 @@ def resolve_body_model_settings(
 
 
 def prepare_model_assets(config: PipelineConfig) -> None:
+    # NOTE: Model asset preparation runs synchronously and may block the main thread/UI during downloads. Consider dispatching to a background thread with progress callbacks for GUI applications.
     if needs_mediapipe(config.body_backend, config.hand_backend, config.enable_backend_fallbacks):
         if config.body_backend == "mediapipe" or config.enable_backend_fallbacks:
             config.mediapipe_pose_model_path = ensure_mediapipe_pose_model_file(
@@ -424,6 +425,7 @@ def _build_pipeline_config(
         fps_log_interval=args.fps_log_interval,
         fps_overlay_enabled=not args.no_fps_overlay,
         benchmark_frames=args.benchmark_frames,
+        execution_mode=getattr(args, "execution_mode", "auto"),
         parallel_workers=args.parallel_workers,
         parallel_chunk_seconds=args.parallel_chunk_seconds,
         parallel_overlap_seconds=args.parallel_overlap_seconds,

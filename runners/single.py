@@ -72,27 +72,20 @@ def run_assignment(config: PipelineConfig) -> bool:
                     "source": str(config.video_path),
                 },
             )
-            motion_frames.append({"frame_index": frame_index, "joints": joints})
+            motion_frames.append({"frame_index": frame_index, "people": [{"id": 1, "joints": joints}]})
             fps_meter.tick(frame_index)
             draw_fps_overlay(frame, fps_meter, config.fps_overlay_enabled)
             preview_sink.write(frame, frame_index)
             frame_index += 1
-            session.write(frame)
-
-            if config.enable_preview:
-                cv2.imshow(config.preview_window_title, frame)
-                if cv2.waitKey(1) & 0xFF == 27:
-                    break
     finally:
         session.close()
         osc_sender.close()
-        cv2.destroyAllWindows()
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
 
     export_metadata = {
-        "mode": "single",
-        "profile": config.profile,
-        "body_backend": config.body_backend,
-        "hand_backend": config.hand_backend,
         "mediapipe_pose_model": config.mediapipe_pose_model,
         "source": str(config.video_path),
         "body_model_variant": config.body_model_variant,

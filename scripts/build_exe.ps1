@@ -43,12 +43,7 @@ $PyInstallerVersion = & $Python -m PyInstaller --version
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller is not installed for $Python. Run: `"$Python`" -m pip install pyinstaller"
 }
-$PySideCheck = & $Python -c "import PySide6; print(PySide6.__version__)"
-if ($LASTEXITCODE -ne 0) {
-    throw "PySide6 is not installed for $Python. Run: `"$Python`" -m pip install PySide6"
-}
 Write-Host "Using PyInstaller: $PyInstallerVersion"
-Write-Host "Using PySide6: $PySideCheck"
 
 Push-Location $ProjectRoot
 try {

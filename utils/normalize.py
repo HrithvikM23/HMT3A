@@ -12,17 +12,27 @@ def build_hand_box(
     scale: float,
     forward_shift: float,
 ) -> tuple[int, int, int, int]:
-    wx, wy, _ = wrist_point
-    ex, ey, _ = elbow_point
+    wx, wy, wc = wrist_point[0], wrist_point[1], wrist_point[2]
+    ex, ey, ec = elbow_point[0], elbow_point[1], elbow_point[2]
 
     forearm_dx = wx - ex
     forearm_dy = wy - ey
-    forearm_len = max(int(math.hypot(forearm_dx, forearm_dy)), 1)
+    raw_forearm_len = math.hypot(forearm_dx, forearm_dy)
+
+    if ec > 0.10 and wc > 0.10 and raw_forearm_len >= 5.0 and not (ex == 0 and ey == 0):
+        forearm_len = max(int(raw_forearm_len), 1)
+        direction_x = forearm_dx / float(forearm_len)
+        direction_y = forearm_dy / float(forearm_len)
+        actual_shift = forward_shift
+    else:
+        forearm_len = min_box_size
+        direction_x = 0.0
+        direction_y = -1.0
+        actual_shift = 0.0
+
     box_size = max(min_box_size, int(forearm_len * scale))
-    direction_x = forearm_dx / forearm_len
-    direction_y = forearm_dy / forearm_len
-    center_x = int(round(wx + direction_x * box_size * forward_shift))
-    center_y = int(round(wy + direction_y * box_size * forward_shift))
+    center_x = int(round(wx + direction_x * box_size * actual_shift))
+    center_y = int(round(wy + direction_y * box_size * actual_shift))
 
     x1 = max(0, center_x - box_size // 2)
     y1 = max(0, center_y - box_size // 2)

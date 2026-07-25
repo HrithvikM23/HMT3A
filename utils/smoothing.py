@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 Point = tuple[int, int, float]
 
 
@@ -10,6 +12,12 @@ class LandmarkSmoother:
         self._body_missing_counts: list[int] = []
         self._hand_state: dict[str, list[Point]] = {}
         self._hand_missing_counts: dict[str, list[int]] = {}
+
+    def reset(self):
+        self._body_state = None
+        self._body_missing_counts = []
+        self._hand_state = {}
+        self._hand_missing_counts = {}
 
     def smooth_body(self, points):
         smoothed = self._smooth_points(
@@ -79,8 +87,16 @@ class LandmarkSmoother:
             if conf > threshold:
                 if prev_point is not None:
                     prev_x, prev_y, _ = prev_point
-                    px = int(round(alpha * px + (1.0 - alpha) * prev_x))
-                    py = int(round(alpha * py + (1.0 - alpha) * prev_y))
+                    
+                    velocity = math.hypot(px - prev_x, py - prev_y)
+                    cutoff = 1.0 + 0.007 * velocity
+                    adaptive_alpha = 1.0 / (1.0 + 1.0 / (2 * math.pi * cutoff))
+                    
+                    if missing_counts[index] > 0:
+                        adaptive_alpha = min(1.0, adaptive_alpha + missing_counts[index] * 0.15)
+                    
+                    px = int(round(adaptive_alpha * px + (1.0 - adaptive_alpha) * prev_x))
+                    py = int(round(adaptive_alpha * py + (1.0 - adaptive_alpha) * prev_y))
                 smoothed_point = (px, py, float(conf))
                 missing_counts[index] = 0
                 smoothed_points.append(smoothed_point)

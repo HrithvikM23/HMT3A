@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import copy
+import json
 import math
 import os
 import shutil
+import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -15,6 +18,9 @@ from utils.exports import build_joint_map
 from utils.fps import FpsMeter, draw_fps_overlay
 from utils.logging import log_info, log_warning
 from utils.run_metadata import build_run_metadata, write_run_metadata
+
+
+_worker_cache: dict[str, Any] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +38,7 @@ class ChunkResult:
     start_frame: int
     end_frame: int
     rendered_path: Path
-    motion_frames: list[dict[str, object]]
+    motion_frames_path: str | None
     processed_frames: int
 
 
@@ -68,6 +74,11 @@ def _auto_parallel_workers(config: PipelineConfig, total_frames: int, fps: float
 
 
 def resolve_parallel_workers(config: PipelineConfig, *, total_frames: int = 0, fps: float = 0.0) -> int:
+    mode = getattr(config, "execution_mode", "auto")
+    if mode == "serial":
+        return 1
+    if mode == "parallel":
+        return max(2, config.parallel_workers) if config.parallel_workers > 1 else max(2, _auto_parallel_workers(config, total_frames, fps))
     if config.parallel_workers == 0:
         return _auto_parallel_workers(config, total_frames, fps)
     return max(1, config.parallel_workers)
@@ -88,6 +99,11 @@ def resolve_parallel_overlap_seconds(config: PipelineConfig) -> float:
 
 
 def eligible_for_parallel_single(config: PipelineConfig) -> bool:
+    mode = getattr(config, "execution_mode", "auto")
+    if mode == "serial" or config.parallel_workers == 1:
+        return False
+    if mode == "parallel":
+        return isinstance(config.video_path, Path) and config.max_people == 1
     return (
         isinstance(config.video_path, Path)
         and config.max_people == 1
@@ -142,19 +158,30 @@ def _probe_video(config: PipelineConfig) -> tuple[int, float, int, int]:
         source.close()
 
 
-def _process_chunk(config: PipelineConfig, spec: ChunkSpec) -> ChunkResult:
+def _process_chunk(config: PipelineConfig, spec: ChunkSpec, worker_index: int | None = None) -> ChunkResult:
+    config = copy.copy(config)
     from camera.capture import VideoInputSource, VideoOutputWriter
     from inference.rtmpose import ONNXPoseHandRunner
     from network.osc_sender import OSCSender
     from pipeline.pipeline import PoseHandPipeline
     from utils.bootstrap_paths import ensure_local_environment
-    from utils.logging import install_safe_stdio
+    from utils.logging import install_safe_stdio, log_info
+    from utils.preview_stream import PreviewFrameSink
     from utils.smoothing import LandmarkSmoother
 
     install_safe_stdio()
     ensure_local_environment()
+
+    if worker_index is None:
+        env_idx = os.environ.get("KINARA_WORKER_INDEX")
+        worker_index = int(env_idx) if env_idx is not None and env_idx.isdigit() else 0
+    os.environ["KINARA_WORKER_INDEX"] = str(worker_index)
+
+    config = copy.copy(config)
     config.enable_preview = False
     config.osc_enabled = False
+
+    preview_sink = PreviewFrameSink()
 
     source = VideoInputSource(config.video_path, fallback_fps=config.fallback_fps)
     writer = VideoOutputWriter(
@@ -164,21 +191,35 @@ def _process_chunk(config: PipelineConfig, spec: ChunkSpec) -> ChunkResult:
         fps=source.fps,
         output_fourcc=config.output_fourcc,
     )
-    runner = ONNXPoseHandRunner(config)
-    smoother = LandmarkSmoother(config)
     osc_sender = OSCSender(config.osc_host, config.osc_port, False)
-    pipeline = PoseHandPipeline(config, runner, smoother, osc_sender)
-    fps_meter = FpsMeter(f"chunk-{spec.index}", 0.0)
-    motion_frames: list[dict[str, object]] = []
-    processed_frames = 0
 
     try:
+        cache_key = f"{getattr(config, 'body_model_path', '')}_{getattr(config, 'hand_model_path', '')}"
+        if cache_key in _worker_cache:
+            runner = _worker_cache[cache_key]
+        else:
+            runner = ONNXPoseHandRunner(config)
+            _worker_cache[cache_key] = runner
+            
+        smoother = LandmarkSmoother(config)
+        pipeline = PoseHandPipeline(config, runner, smoother, osc_sender)
+        fps_meter = FpsMeter(f"chunk-{spec.index}", 0.0)
+        motion_frames_file = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
+        motion_frames_path = motion_frames_file.name
+        processed_frames = 0
+        spec_total_frames = max(1, spec.end_frame - spec.start_frame)
+
         source.cap.set(1, spec.warmup_start_frame)
-        current_frame = spec.warmup_start_frame
+        actual_frame = int(source.cap.get(1))
+        current_frame = actual_frame
         while current_frame < spec.end_frame:
             ok, frame = source.read()
             if not ok or frame is None:
                 break
+
+            if current_frame < spec.warmup_start_frame:
+                current_frame += 1
+                continue
 
             body_points, hands_by_side = pipeline.detect_pose(frame)
             joint_depths = pipeline.last_joint_depths if config.single_camera_depth_mode == "mediapipe" else None
@@ -186,23 +227,41 @@ def _process_chunk(config: PipelineConfig, spec: ChunkSpec) -> ChunkResult:
             pipeline.render_pose(frame, body_points, hands_by_side, send_osc=False)
 
             if current_frame >= spec.start_frame:
-                motion_frames.append({"frame_index": current_frame, "joints": joints})
+                motion_frames_file.write(json.dumps({"frame_index": current_frame, "joints": joints}) + "\n")
                 fps_meter.tick(current_frame)
                 draw_fps_overlay(frame, fps_meter, config.fps_overlay_enabled)
+                preview_sink.write(frame, current_frame)
                 writer.write(frame)
                 processed_frames += 1
+
+                step = max(1, spec_total_frames // 4)
+                if processed_frames % step == 0 or processed_frames == spec_total_frames:
+                    pct = (processed_frames / max(1, spec_total_frames)) * 100.0
+                    log_info(
+                        f"[Worker {worker_index}] Chunk {spec.index + 1} progress: {pct:.1f}% "
+                        f"({processed_frames}/{spec_total_frames} frames)"
+                    )
             current_frame += 1
     finally:
         source.close()
         writer.close()
         osc_sender.close()
+        if hasattr(preview_sink, 'close'):
+            preview_sink.close()
+        motion_frames_file.close()
+
+    completion_pct = (processed_frames / max(1, spec_total_frames)) * 100.0
+    log_info(
+        f"[Worker {worker_index}] Chunk {spec.index + 1} completed: {completion_pct:.1f}% "
+        f"({processed_frames}/{spec_total_frames} frames)"
+    )
 
     return ChunkResult(
         index=spec.index,
         start_frame=spec.start_frame,
         end_frame=spec.end_frame,
         rendered_path=spec.rendered_path,
-        motion_frames=motion_frames,
+        motion_frames_path=motion_frames_path,
         processed_frames=processed_frames,
     )
 
@@ -276,20 +335,39 @@ def run_parallel_assignment(config: PipelineConfig) -> bool:
         f"{workers} workers, {len(specs)} chunks, {chunk_seconds:.2f}s chunks, {overlap_seconds:.2f}s overlap"
     )
 
+    chunk_paths = [spec.rendered_path for spec in specs]
     try:
         results: list[ChunkResult] = []
+        completed_chunks = 0
+        total_chunks = len(specs)
         with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(_process_chunk, config, spec) for spec in specs]
+            futures = [
+                executor.submit(_process_chunk, config, spec, spec.index % workers)
+                for spec in specs
+            ]
             for future in as_completed(futures):
-                results.append(future.result())
+                res = future.result()
+                results.append(res)
+                completed_chunks += 1
+                progress_pct = (completed_chunks / total_chunks) * 100.0
+                log_info(
+                    f"Chunk {res.index + 1}/{total_chunks} finished by worker {res.index % workers} "
+                    f"({completed_chunks}/{total_chunks} chunks completed, {progress_pct:.1f}%)"
+                )
         results.sort(key=lambda result: result.index)
 
         rendered_paths = [result.rendered_path for result in results]
-        motion_frames = [
-            frame
-            for result in results
-            for frame in result.motion_frames
-        ]
+        motion_frames = []
+        for result in results:
+            if result.motion_frames_path and os.path.exists(result.motion_frames_path):
+                with open(result.motion_frames_path, "r") as f:
+                    for line in f:
+                        if line.strip():
+                            motion_frames.append(json.loads(line))
+                try:
+                    os.unlink(result.motion_frames_path)
+                except OSError:
+                    pass
         motion_frames.sort(key=lambda frame: int(frame.get("frame_index", 0)))
         _concatenate_rendered_chunks(rendered_paths, config.rendered_output_path, config.output_fourcc, fps)
 
@@ -326,4 +404,9 @@ def run_parallel_assignment(config: PipelineConfig) -> bool:
         log_warning(f"Parallel processing failed; falling back to serial processing: {type(exc).__name__}: {exc}")
         return False
     finally:
+        for p in chunk_paths:
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
         shutil.rmtree(chunk_root, ignore_errors=True)

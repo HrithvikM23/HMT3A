@@ -8,10 +8,12 @@ from utils.skeleton import JointMap, JointValue
 FOOT_LOCK_JOINTS = ("LeftFoot", "LeftToeBase", "RightFoot", "RightToeBase")
 
 
-def cleanup_motion_frames(frames: list[dict[str, object]], config) -> list[dict[str, object]]:
+def cleanup_motion_frames(frames: list[dict[str, object]], config, _already_copied: bool = False) -> list[dict[str, object]]:
     if not getattr(config, "export_cleanup_enabled", True):
         return frames
-    cleaned = _copy_frames(frames)
+    if frames and "people" in frames[0]:
+        return cleanup_multi_person_frames(frames, config)
+    cleaned = frames if _already_copied else _copy_frames(frames)
     _interpolate_missing(cleaned)
     _remove_velocity_spikes(cleaned, float(config.export_cleanup_max_velocity))
     _smooth_frames(cleaned, float(config.export_cleanup_smoothing_alpha))
@@ -33,13 +35,22 @@ def cleanup_multi_person_frames(frames: list[dict[str, object]], config) -> list
         person_track: list[dict[str, object]] = []
         for frame in cleaned_frames:
             person = _find_person(frame, person_key)
+            joints = {} if person is None else person.get("joints", {})
+            if isinstance(joints, dict):
+                copied_joints = {
+                    name: _copy_joint(cast(JointValue, value))
+                    for name, value in joints.items()
+                    if isinstance(value, dict)
+                }
+            else:
+                copied_joints = {}
             person_track.append(
                 {
                     "frame_index": frame.get("frame_index", 0),
-                    "joints": {} if person is None else person.get("joints", {}),
+                    "joints": copied_joints,
                 }
             )
-        cleaned_by_key[person_key] = cleanup_motion_frames(person_track, config)
+        cleaned_by_key[person_key] = cleanup_motion_frames(person_track, config, _already_copied=True)
 
     for frame_index, frame in enumerate(cleaned_frames):
         people = frame.get("people", [])
@@ -140,6 +151,19 @@ def _remove_velocity_spikes(frames: list[dict[str, object]], max_velocity: float
             assert previous is not None and current is not None and following is not None
             if _distance(previous, current) <= max_velocity or _distance(current, following) <= max_velocity:
                 continue
+            
+            v1_x = float(current["x"]) - float(previous["x"])
+            v1_y = float(current["y"]) - float(previous["y"])
+            v1_z = float(current["z"]) - float(previous["z"])
+            
+            v2_x = float(following["x"]) - float(current["x"])
+            v2_y = float(following["y"]) - float(current["y"])
+            v2_z = float(following["z"]) - float(current["z"])
+            
+            dot_product = v1_x * v2_x + v1_y * v2_y + v1_z * v2_z
+            if dot_product >= 0:
+                continue
+
             repaired = _blend_joint(previous, following, 0.5)
             repaired["confidence"] = min(float(current["confidence"]), float(repaired["confidence"]))
             _set_joint(frames[index], joint_name, repaired)
@@ -167,10 +191,11 @@ def _smooth_frames(frames: list[dict[str, object]], alpha: float) -> None:
             previous_by_joint[joint_name] = smoothed
 
 
-def _lock_planted_feet(frames: list[dict[str, object]], velocity_threshold: float, max_lift: float) -> None:
+def _lock_planted_feet(frames: list[dict[str, object]], velocity_threshold: float, max_lift: float, fps: float = 30.0) -> None:
     ground_y = _ground_y(frames)
     if ground_y is None:
         return
+    scaled_threshold = velocity_threshold * (30.0 / fps)
     locked: dict[str, JointValue] = {}
     for frame in frames:
         for joint_name in FOOT_LOCK_JOINTS:
@@ -181,7 +206,7 @@ def _lock_planted_feet(frames: list[dict[str, object]], velocity_threshold: floa
             assert joint is not None
             previous_locked = locked.get(joint_name)
             near_ground = abs(float(joint["y"]) - ground_y) <= max_lift
-            slow = previous_locked is not None and _distance(previous_locked, joint) <= velocity_threshold
+            slow = previous_locked is not None and _distance(previous_locked, joint) <= scaled_threshold
             if previous_locked is not None and near_ground and slow:
                 _set_joint(frame, joint_name, _copy_joint(previous_locked))
                 continue
@@ -199,7 +224,11 @@ def _ground_y(frames: list[dict[str, object]]) -> float | None:
             if _joint_valid(joint):
                 assert joint is not None
                 values.append(float(joint["y"]))
-    return min(values) if values else None
+    if not values:
+        return None
+    sorted_values = sorted(values)
+    idx = int(len(sorted_values) * 0.05)
+    return float(sorted_values[idx])
 
 
 def _joint(frame: dict[str, object], joint_name: str) -> JointValue | None:

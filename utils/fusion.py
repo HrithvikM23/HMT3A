@@ -88,14 +88,48 @@ def load_camera_calibrations(path: Path | None) -> dict[str, dict[str, float]]:
         if not isinstance(label, str) or not isinstance(values, dict):
             continue
         target = calibrations.setdefault(label.upper(), dict(DEFAULT_CAMERA_CALIBRATION))
+
+
+@dataclass(frozen=True, slots=True)
+class FrameReference:
+    origin_x: float
+    origin_y: float
+    scale: float
+
+
+def load_camera_calibrations(path: Path | None) -> dict[str, dict[str, float]]:
+    calibrations: dict[str, dict[str, float]] = {}
+    if path is None:
+        return calibrations
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Calibration file must contain a JSON object keyed by camera label.")
+
+    for label, values in payload.items():
+        if not isinstance(label, str) or not isinstance(values, dict):
+            continue
+        target = calibrations.setdefault(label.upper(), dict(DEFAULT_CAMERA_CALIBRATION))
         for key in ("depth_sign", "depth_scale", "weight"):
             if key in values:
                 target[key] = float(values[key])
     return calibrations
 
 
+def _get_calibration_entry(label: str, calibrations: Mapping[str, Mapping[str, float]] | None = None) -> Mapping[str, float]:
+    if not calibrations:
+        return {}
+    if label in calibrations:
+        return calibrations[label]
+    if label.upper() in calibrations:
+        return calibrations[label.upper()]
+    if label.lower() in calibrations:
+        return calibrations[label.lower()]
+    return {}
+
+
 def _camera_weight(label: str, calibrations: Mapping[str, Mapping[str, float]] | None = None) -> float:
-    calibration = {} if calibrations is None else calibrations.get(label.upper(), {})
+    calibration = _get_calibration_entry(label, calibrations)
     weight = float(calibration.get("weight", DEFAULT_CAMERA_WEIGHT))
     return max(0.0, weight)
 
@@ -224,7 +258,7 @@ def fuse_body_views(
             if conf <= 0:
                 continue
             _, _, view_weight = prepared_sources[label]
-            weight = conf * view_weight
+            weight = (conf ** 2) * view_weight
             weighted_x += x * weight
             weighted_y += y * weight
             total_weight += weight
@@ -279,7 +313,7 @@ def fuse_hand_views(
             if conf <= 0:
                 continue
             _, _, view_weight = prepared_sources[label]
-            weight = conf * view_weight
+            weight = (conf ** 2) * view_weight
             weighted_x += x * weight
             weighted_y += y * weight
             total_weight += weight
@@ -317,7 +351,7 @@ def _estimate_body_joint_depths(
 ) -> dict[str, float]:
     prepared_sources: list[tuple[list[tuple[int, int, float]], FrameReference, float, float, float]] = []
     for label, points in camera_bodies.items():
-        calibration = calibrations.get(label.upper(), DEFAULT_CAMERA_CALIBRATION)
+        calibration = _get_calibration_entry(label, calibrations)
         depth_sign = float(calibration.get("depth_sign", 0.0))
         if depth_sign == 0.0:
             continue
@@ -343,7 +377,7 @@ def _estimate_body_joint_depths(
             if point[2] <= threshold:
                 continue
             local_x = (point[0] - reference.origin_x) / max(reference.scale, 1.0)
-            weight = point[2] * view_weight
+            weight = (point[2] ** 2) * view_weight
             weighted_depth += local_x * depth_sign * depth_view_scale * depth_scale * reference.scale * weight
             total_weight += weight
         joint_depths[joint_name] = 0.0 if total_weight <= 0.0 else weighted_depth / total_weight
@@ -361,7 +395,7 @@ def _estimate_hand_joint_depths(
         "right": [],
     }
     for label, hands_by_side in camera_hands.items():
-        calibration = calibrations.get(label.upper(), DEFAULT_CAMERA_CALIBRATION)
+        calibration = _get_calibration_entry(label, calibrations)
         depth_sign = float(calibration.get("depth_sign", 0.0))
         if depth_sign == 0.0:
             continue
@@ -384,7 +418,7 @@ def _estimate_hand_joint_depths(
             if point[2] <= threshold:
                 continue
             local_x = (point[0] - reference.origin_x) / max(reference.scale, 1.0)
-            weight = point[2] * view_weight
+            weight = (point[2] ** 2) * view_weight
             weighted_depth += local_x * depth_sign * depth_view_scale * depth_scale * reference.scale * weight
             total_weight += weight
         joint_depths[joint_name] = 0.0 if total_weight <= 0.0 else weighted_depth / total_weight

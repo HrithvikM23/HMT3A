@@ -70,6 +70,11 @@ class PersonTrack:
     velocity: tuple[float, float] = (0.0, 0.0)
     color_signature: ColorProfile = field(default_factory=dict)
     detection_score: float = 0.0
+    hit_streak: int = 0
+
+    @property
+    def is_confirmed(self) -> bool:
+        return self.hit_streak >= 3
 
     @property
     def center(self) -> tuple[float, float]:
@@ -212,7 +217,7 @@ class MultiPersonTracker:
             self._predict_tracks(frame)
         self._resolve_cross_person_hands()
         self._frame_index += 1
-        return [track for track in self._tracks if track.missed_frames == 0 and track.body_points]
+        return [track for track in self._tracks if track.missed_frames == 0 and track.body_points and track.is_confirmed]
 
     def _should_run_person_model(self) -> bool:
         return not self._tracks or self._frame_index % self.config.body_detect_interval == 0
@@ -345,6 +350,7 @@ class MultiPersonTracker:
                 continue
 
             detection = detections[detection_index]
+            track.hit_streak += 1
             self._update_track_from_detection(track, detection, frame)
             updated_tracks.append(track)
 
@@ -353,6 +359,7 @@ class MultiPersonTracker:
             if detection_index in used_detections:
                 continue
             track = self._create_track()
+            track.hit_streak = 1
             track.label = self._best_identity_label(detection, assigned_labels)
             self._update_track_from_detection(track, detection, frame)
             updated_tracks.append(track)
@@ -424,7 +431,17 @@ class MultiPersonTracker:
         track.body_points = body_points
         track.hands_by_side = hands_by_side
         track.joint_depths = dict(track.pipeline.last_joint_depths)
-        track.color_signature = _blend_color_scores(track.color_signature, detection.color_scores)
+
+        # Skip color update if this track's box overlaps significantly with
+        # another active track (prevents identity bleed during occlusions).
+        is_occluded = False
+        for other in self._tracks:
+            if other.id != track.id and _iou(detection.box, other.box) > 0.3:
+                is_occluded = True
+                break
+        if not is_occluded:
+            track.color_signature = _blend_color_scores(track.color_signature, detection.color_scores)
+
         track.detection_score = detection.score
         self._refresh_track_label(track, detection)
 

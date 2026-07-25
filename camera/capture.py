@@ -71,13 +71,17 @@ class VideoCaptureSession:
         self.frame_width = self.source.frame_width
         self.frame_height = self.source.frame_height
         self.fps = self.source.fps
-        self.writer = VideoOutputWriter(
-            output_path,
-            frame_width=self.frame_width,
-            frame_height=self.frame_height,
-            fps=self.fps,
-            output_fourcc=output_fourcc,
-        )
+        try:
+            self.writer = VideoOutputWriter(
+                output_path,
+                frame_width=self.frame_width,
+                frame_height=self.frame_height,
+                fps=self.fps,
+                output_fourcc=output_fourcc,
+            )
+        except Exception:
+            self.source.close()
+            raise
 
     def read(self):
         return self.source.read()

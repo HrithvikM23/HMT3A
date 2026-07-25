@@ -136,10 +136,15 @@ class ONNXPoseHandRunner:
                 raise ModuleNotFoundError("onnxruntime is not installed. Install ONNX Runtime or use --hand-backend mediapipe.")
             session_options = ort.SessionOptions()
             session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            providers = _resolve_provider_names(config)
+            gpu_providers = {"CUDAExecutionProvider", "DmlExecutionProvider"}
+            if any(p in gpu_providers for p in providers):
+                session_options.enable_mem_pattern = False
+                session_options.enable_cpu_mem_arena = False
             self.hand_session = ort.InferenceSession(
                 str(config.hand_model_path),
                 sess_options=session_options,
-                providers=_resolve_provider_names(config),
+                providers=providers,
             )
         device_name = "" if config.yolo_device is None else str(config.yolo_device).lower()
         self._use_yolo_half = bool(config.yolo_half and device_name != "cpu" and _cuda_available())
@@ -351,7 +356,7 @@ class ONNXPoseHandRunner:
         frame_width: int,
         frame_height: int,
     ) -> dict[str, float]:
-        if not world_landmarks:
+        if not world_landmarks or not image_landmarks or len(image_landmarks) < 33 or len(world_landmarks) < 33:
             return {}
 
         name_to_mp_index = {
@@ -518,7 +523,7 @@ class ONNXPoseHandRunner:
             scores_array = scores_array[None, ...]
 
         detections: list[BodyDetection] = []
-        for person_index in range(min(len(keypoints_array), max_people)):
+        for person_index in range(len(keypoints_array)):
             person_keypoints = keypoints_array[person_index]
             person_scores = scores_array[person_index] if person_index < len(scores_array) else np.ones((len(person_keypoints),), dtype=np.float32)
             point_count = min(17, len(person_keypoints), len(person_scores))
@@ -534,6 +539,7 @@ class ONNXPoseHandRunner:
                 if hands_by_side:
                     self._wholebody_hands_by_body[tuple(body_points)] = hands_by_side
 
+            frame_h, frame_w = frame_bgr.shape[:2]
             confident_points = [
                 (x, y)
                 for x, y, confidence in body_points
@@ -542,9 +548,14 @@ class ONNXPoseHandRunner:
             if confident_points:
                 x_values = [point[0] for point in confident_points]
                 y_values = [point[1] for point in confident_points]
-                box = (min(x_values), min(y_values), max(x_values), max(y_values))
+                box = (
+                    max(0, min(x_values)),
+                    max(0, min(y_values)),
+                    min(frame_w, max(x_values)),
+                    min(frame_h, max(y_values)),
+                )
             else:
-                box = (0, 0, 0, 0)
+                box = (0, 0, frame_w, frame_h)
             detections.append(
                 {
                     "id": None,
@@ -555,7 +566,7 @@ class ONNXPoseHandRunner:
             )
 
         detections.sort(key=lambda item: item["score"], reverse=True)
-        return detections
+        return detections[:max_people]
 
     def _extract_wholebody_hands(self, keypoints: np.ndarray[Any, Any], scores: np.ndarray[Any, Any]) -> dict[str, HandPayload]:
         hands_by_side: dict[str, HandPayload] = {}
@@ -596,17 +607,22 @@ class ONNXPoseHandRunner:
                 return hand_points
 
         x1, y1, x2, y2 = box
+        frame_h, frame_w = frame_bgr.shape[:2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(frame_w, x2), min(frame_h, y2)
+        if x2 <= x1 or y2 <= y1:
+            return None
         crop = frame_bgr[y1:y2, x1:x2]
         if crop.size == 0:
             return None
 
-        crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
         resized = cv2.resize(
-            crop_rgb,
+            crop,
             (self.config.hand_input_size, self.config.hand_input_size),
             interpolation=cv2.INTER_LINEAR,
         )
-        hand_input = resized.astype(np.float32) / 255.0
+        crop_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        hand_input = crop_rgb.astype(np.float32) / 255.0
         hand_input = np.transpose(hand_input, (2, 0, 1))
         hand_input = np.expand_dims(hand_input, axis=0)
 
@@ -615,6 +631,9 @@ class ONNXPoseHandRunner:
             return None
         outputs = hand_session.run(None, {self.config.hand_input_name: hand_input})
         detections = np.asarray(outputs[0], dtype=np.float32)[0]
+
+        if detections.size == 0 or len(detections) == 0:
+            return None
 
         best = detections[np.argmax(detections[:, 4])]
         if float(best[4]) <= self.config.hand_det_threshold:
@@ -629,8 +648,8 @@ class ONNXPoseHandRunner:
             y = float(best[base + 1])
             conf = float(best[base + 2])
 
-            px = x1 + int((x / self.config.hand_input_size) * crop_w)
-            py = y1 + int((y / self.config.hand_input_size) * crop_h)
+            px = x1 + int(round((x / float(self.config.hand_input_size)) * crop_w))
+            py = y1 + int(round((y / float(self.config.hand_input_size)) * crop_h))
             points.append((px, py, conf))
 
         return points
@@ -664,7 +683,7 @@ class ONNXPoseHandRunner:
         return points
 
     def _mediapipe_hand_depths(self, image_landmarks: Any, world_landmarks: Any, crop_width: int, crop_height: int) -> list[float] | None:
-        if not world_landmarks:
+        if not world_landmarks or not image_landmarks or len(image_landmarks) < 21 or len(world_landmarks) < 21:
             return None
 
         scale_candidates = []

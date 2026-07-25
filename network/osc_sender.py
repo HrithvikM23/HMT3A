@@ -36,31 +36,44 @@ class OSCSender:
             ],
         }
         encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        self._socket.sendto(encoded, (self.host, self.port))
+        try:
+            self._socket.sendto(encoded, (self.host, self.port))
+        except OSError:
+            pass
 
     def send_people(self, people, metadata=None) -> None:
         if not self.enabled or self._socket is None:
             return
 
-        payload = {
-            "format": "kinara-live-v2",
-            "metadata": metadata or {},
-            "people": [
-                self._build_person_payload(
-                    person_id=person["id"],
-                    label=person.get("label"),
-                    body_points=person["body_points"],
-                    hands_by_side=person["hands_by_side"],
-                    box=person.get("box"),
-                    joints=person.get("joints"),
-                    score=person.get("score"),
-                    camera_views=person.get("camera_views"),
-                )
-                for person in people
-            ],
-        }
-        encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        self._socket.sendto(encoded, (self.host, self.port))
+        total_people = len(people)
+        for index, person in enumerate(people):
+            payload = {
+                "format": "kinara-live-v2",
+                "metadata": metadata or {},
+                "person_index": index,
+                "total_people": total_people,
+                "people": [
+                    self._build_person_payload(
+                        person_id=person["id"],
+                        label=person.get("label"),
+                        body_points=person["body_points"],
+                        hands_by_side=person["hands_by_side"],
+                        box=person.get("box"),
+                        joints=person.get("joints"),
+                        score=person.get("score"),
+                        camera_views=person.get("camera_views"),
+                    )
+                ],
+            }
+            encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            if len(encoded) > 60000:
+                import logging
+                logging.warning(f"OSC packet for person {person['id']} exceeds 60000 bytes, skipping.")
+                continue
+            try:
+                self._socket.sendto(encoded, (self.host, self.port))
+            except OSError:
+                pass
 
     def _build_person_payload(self, person_id, label, body_points, hands_by_side, box=None, joints=None, score=None, camera_views=None):
         payload = {
@@ -79,7 +92,7 @@ class OSCSender:
             ],
             "hands": {
                 side: {
-                    "box": [int(value) for value in hand_payload["box"]],
+                    "box": None if hand_payload.get("box") is None else [int(value) for value in hand_payload["box"]],
                     "points": [
                         {
                             "index": index,

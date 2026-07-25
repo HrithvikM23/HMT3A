@@ -26,7 +26,7 @@ from runners.fused_alignment import align_people_across_cameras
 from utils.exports import build_joint_map, export_multi_person_fbx_bundle, export_multi_person_json
 from utils.fps import FpsMeter, draw_fps_overlay
 from utils.fusion import estimate_joint_depths, fuse_body_views, load_camera_calibrations
-from utils.logging import log_info
+from utils.logging import log_info, log_warning
 from utils.motion_cleanup import cleanup_multi_person_frames
 from utils.multi_person import MultiPersonTracker
 from utils.payloads import HandPayload, PersonPayload
@@ -128,6 +128,7 @@ def run_fused_assignments(
             if config.benchmark_frames and frame_index >= config.benchmark_frames:
                 break
             frames_by_label: dict[str, Any] = {}
+            # NOTE: Lockstep reading assumes identical frame rates across all cameras. Frame rate drift between cameras (e.g., 29.97 vs 30.0 FPS) will cause progressive desync over long captures.
             for label, source in sources.items():
                 ok, frame = source.read()
                 if not ok or frame is None:
@@ -136,6 +137,15 @@ def run_fused_assignments(
                 frames_by_label[label] = frame
             if finished:
                 break
+
+            if frame_index > 0 and frame_index % 1000 == 0:
+                ref_frame_idx = sources[reference_label].cap.get(cv2.CAP_PROP_POS_FRAMES)
+                for label, source in sources.items():
+                    if label == reference_label:
+                        continue
+                    curr_frame_idx = source.cap.get(cv2.CAP_PROP_POS_FRAMES)
+                    if abs(curr_frame_idx - ref_frame_idx) > 1:
+                        log_warning(f"Frame drift detected: {label} is at frame {curr_frame_idx}, reference {reference_label} is at {ref_frame_idx}")
 
             canvas = frames_by_label[reference_label].copy()
             if config.max_people > 1:

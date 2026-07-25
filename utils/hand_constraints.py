@@ -12,6 +12,7 @@ FINGER_CHAINS = (
     ("pinky", (0, 17, 18, 19, 20)),
 )
 
+# TODO: make configurable
 MAX_CHAIN_BEND_DEGREES = {
     "thumb": (65.0, 55.0, 50.0),
     "index": (75.0, 95.0, 80.0),
@@ -20,6 +21,7 @@ MAX_CHAIN_BEND_DEGREES = {
     "pinky": (95.0, 110.0, 95.0),
 }
 
+# TODO: make configurable
 MAX_RADIAL_MULTIPLIER = {
     0: 0.0,
     1: 0.70,
@@ -44,6 +46,7 @@ MAX_RADIAL_MULTIPLIER = {
     20: 1.45,
 }
 
+# TODO: make configurable
 BONE_LENGTH_MULTIPLIER = {
     (0, 1): (0.18, 0.55),
     (1, 2): (0.15, 0.42),
@@ -213,6 +216,9 @@ def _enforce_finger_lanes(points: list[Point]) -> None:
     wrist_xy = _point_xy(points[0])
     index_root_xy = _point_xy(points[5])
     pinky_root_xy = _point_xy(points[17])
+    # Skip lane enforcement if roots overlap (degenerate pose, e.g. hand pointing at camera)
+    if math.hypot(pinky_root_xy[0] - index_root_xy[0], pinky_root_xy[1] - index_root_xy[1]) < 1e-3:
+        return
     lateral_axis = _normalize((pinky_root_xy[0] - index_root_xy[0], pinky_root_xy[1] - index_root_xy[1]))
     forward_axis = (-lateral_axis[1], lateral_axis[0])
 

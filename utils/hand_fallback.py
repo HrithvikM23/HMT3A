@@ -129,8 +129,11 @@ def generate_default_hand(
     if side == "left":
         lateral_axis = (-lateral_axis[0], -lateral_axis[1])
 
-    forearm_len = max(math.hypot(wrist_x - elbow_x, wrist_y - elbow_y), 1.0)
-    hand_scale = max(forearm_len * config.hand_default_scale, 18.0)
+    forearm_len = math.hypot(wrist_x - elbow_x, wrist_y - elbow_y)
+    if forearm_len > 1e-3:
+        hand_scale = forearm_len * config.hand_default_scale
+    else:
+        hand_scale = 18.0
     confidence = max(config.hand_default_confidence, config.hand_kp_threshold + 0.05)
 
     default_points: list[Point] = []

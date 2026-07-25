@@ -66,8 +66,9 @@ def predict_hand_payload(
     current_delta = hand_motion_delta(previous_wrist, wrist_point, previous_elbow, elbow_point)
     offset_x, offset_y = acceleration_aware_delta(current_delta, previous_delta)
     depths = previous_payload.get("depths")
+    box = previous_payload.get("box")
     return (
-        translate_box(previous_payload["box"], offset_x, offset_y),
+        translate_box(box, offset_x, offset_y),
         translate_points(previous_payload["points"], offset_x, offset_y, confidence_decay),
         depths,
     )
@@ -122,7 +123,8 @@ def hand_detection_score(
     score -= min(temporal / max(forearm_len, 1.0), 3.0) * 5.0
 
     if spread < forearm_len * 0.06:
-        score -= 10.0
+        penalty = -10.0 * max(0.0, 1.0 - (spread / (forearm_len * 0.06)))
+        score += penalty
     if spread > max(forearm_len * 1.8, config.hand_box_min_size * 0.7):
         score -= 8.0
     if is_hand_detection_valid(points, wrist_point, elbow_point, config):
@@ -143,7 +145,8 @@ def blend_with_prediction(
         dx = detected[0] - predicted[0]
         dy = detected[1] - predicted[1]
         distance = math.hypot(float(dx), float(dy))
-        detection_weight = 0.72 if distance < config.hand_box_min_size * 0.45 else 0.48
+        t = min(1.0, distance / (config.hand_box_min_size * 0.45))
+        detection_weight = 0.72 - t * 0.24
         x = int(round((detected[0] * detection_weight) + (predicted[0] * (1.0 - detection_weight))))
         y = int(round((detected[1] * detection_weight) + (predicted[1] * (1.0 - detection_weight))))
         confidence = max(float(detected[2]), float(predicted[2]) * config.hold_confidence_decay)

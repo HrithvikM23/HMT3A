@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kinara Motion Capture Desktop Host</title>
+  <!-- Google Fonts: Outfit, Inter, JetBrains Mono, Silkscreen, DotGothic16 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/png" href="assets/kinara-mark.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Nothing OS Inspired Intro Splash Screen Overlay -->
+  <div class="intro-splash" id="introSplash">
+    <canvas id="introRippleCanvas" class="intro-ripple-canvas"></canvas>
+    <div class="intro-content">
+      <div class="intro-logo-box">
+        <img src="assets/kinara-mark.png" alt="Kinara Logo" class="intro-logo-img" width="58" height="58" onerror="if(!this.dataset.fallback){this.dataset.fallback=1;this.src='kinara-mark.png';}else if(this.dataset.fallback==1){this.dataset.fallback=2;this.src='../../assets/kinara-mark.png';}" />
+        <span class="intro-red-dot"></span>
+      </div>
+      <h1 class="intro-title nothing-font">KINARA</h1>
+      <p class="intro-subtitle nothing-font">MARKERLESS MOTION CAPTURE TOOL</p>
+      <div class="intro-loader-bar">
+        <div class="intro-loader-progress"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive Abstract Parallax Background Canvas -->
+  <canvas id="parallaxCanvas" class="parallax-bg-canvas"></canvas>
+
+  <!-- Background Ambient Glow & HUD Overlay -->
+  <div class="ambient-glow bg-glow-1"></div>
+  <div class="ambient-glow bg-glow-2"></div>
+
+  <!-- App Main Wrapper -->
+  <div class="app-wrapper">
+
+    <!-- Top Navigation & Brand Header -->
+    <header class="app-header">
+      <div class="brand-container">
+        <div class="brand-logo-wrapper" title="Click to replay boot intro">
+          <img src="assets/kinara-mark.png" alt="Kinara Logo" class="brand-logo-img" width="34" height="34" onerror="if(!this.dataset.fallback){this.dataset.fallback=1;this.src='kinara-mark.png';}else if(this.dataset.fallback==1){this.dataset.fallback=2;this.src='../../assets/kinara-mark.png';}" />
+        </div>
+        <div class="brand-text-group">
+          <div class="brand-title-row">
+            <span class="brand-title">KINARA</span>
+          </div>
+          <span class="brand-subtitle">Markerless Motion Capture Tool</span>
+        </div>
+      </div>
+
+      <!-- Header Actions -->
+      <div class="header-actions">
+        <button class="btn btn-ghost btn-sm" id="btnThemeToggle" title="Toggle Light / Dark Theme">
+          <svg id="themeIconSun" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg id="themeIconMoon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="display:none;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <span id="themeText">Theme</span>
+        </button>
+        <button class="btn btn-ghost btn-sm" id="btnOpenCmdPalette" title="Search launcher commands and actions (Ctrl + K)">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          Search <kbd>Ctrl K</kbd>
+        </button>
+        <button class="btn btn-ghost btn-sm" id="btnResetDefaults" title="Reset all pipeline configurations to defaults">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Reset Defaults
+        </button>
+      </div>
+    </header>
+
+    <!-- Navigation Control Dock (Innovative Top Glass Tabs) -->
+    <nav class="nav-control-dock">
+      <div class="tab-nav">
+        <button class="tab-btn active" data-tab="presets">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+          Presets <kbd class="tab-kbd">1</kbd>
+        </button>
+        <button class="tab-btn" data-tab="capture">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          Capture <kbd class="tab-kbd">2</kbd>
+        </button>
+        <button class="tab-btn" data-tab="files">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          Files &amp; Output <kbd class="tab-kbd">3</kbd>
+        </button>
+        <button class="tab-btn" data-tab="calibration">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>
+          Calibration <kbd class="tab-kbd">4</kbd>
+        </button>
+        <button class="tab-btn" data-tab="triangulation">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          Triangulation <kbd class="tab-kbd">5</kbd>
+        </button>
+        <button class="tab-btn" data-tab="tune">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="6" y1="12" x2="10" y2="8"/><line x1="10" y1="8" x2="14" y2="12"/><line x1="14" y1="12" x2="18" y2="7"/></svg>
+          Tune <kbd class="tab-kbd">6</kbd>
+        </button>
+      </div>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="app-main">
+
+      <!-- Left Stage & Video HUD Section -->
+      <section class="stage-section">
+
+        <!-- Stage Control & View Mode Switcher Toolbar -->
+        <div class="stage-toolbar">
+          <div class="stage-toolbar-left">
+            <span class="stage-mode-label nothing-font">CAMERA FEED:</span>
+            <div class="camera-tabs-container" id="cameraTabsContainer">
+              <button class="cam-tab active" data-cam="CAM_0">CAM_0</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Video Grid Container -->
+        <div class="video-container">
+          <div class="hud-corners">
+            <span class="hud-corner top-left">+</span>
+            <span class="hud-corner top-right">+</span>
+            <span class="hud-corner bottom-left">+</span>
+            <span class="hud-corner bottom-right">+</span>
+          </div>
+
+          <div class="video-grid" id="videoGrid">
+            <!-- Single Stream Tile -->
+            <div class="video-tile" id="tileMain">
+              <div class="tile-header">
+                <span class="pulse-indicator"></span>
+                <span id="activeCamTitle">CAM_0</span>
+                <span class="tile-badge">LIVE STREAM</span>
+                <span id="hudFrame" class="tile-badge" style="font-family: var(--font-mono);">00000</span>
+              </div>
+
+              <!-- Live Preview / Stream Container -->
+              <div class="tile-placeholder" id="previewPlaceholder">
+                <div class="radar-scan"></div>
+                <svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.5" class="placeholder-icon">
+                  <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                </svg>
+                <div class="placeholder-text nothing-font">Awaiting Live Motion Stream</div>
+                <div class="placeholder-sub">Processed camera frames &amp; skeleton overlays stream live in real time</div>
+              </div>
+              <img id="livePreviewImg" class="live-preview-img" style="display:none;" alt="Live Motion Frame" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Command Control Center & Runner Command -->
+        <div class="command-card">
+          <div class="command-bar">
+            <button class="btn btn-primary btn-cta" id="btnStart" aria-label="Start Pipeline">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              START PIPELINE
+            </button>
+            <button class="btn btn-secondary" id="btnCheck" aria-label="Check Runtime">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+              Check Runtime
+            </button>
+            <button class="btn btn-secondary" id="btnStop" aria-label="Stop Pipeline">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+              Stop
+            </button>
+            <div class="divider"></div>
+            <button class="btn btn-danger" id="btnKill" aria-label="Kill Process">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              Kill
+            </button>
+          </div>
+
+          <div class="command-input-row">
+            <div class="cmd-prefix">CLI &gt;</div>
+            <input type="text" class="command-input" id="cmdInput" placeholder="Generated execution command..." readonly aria-label="CLI Command Output" />
+            <button class="btn btn-icon" id="btnCopyCmd" title="Copy CLI Command" aria-label="Copy Command">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Vertical Resizer Splitter (Stage vs Log Console) -->
+        <div class="splitter splitter-v" id="splitterVerticalLog" title="Drag to resize terminal log height (Double-click to reset)">
+          <div class="splitter-grip"></div>
+        </div>
+
+        <!-- Terminal Output Log Console -->
+        <div class="log-console-container">
+          <div class="log-console-header">
+            <div class="log-header-left">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+              <span>HOST TERMINAL CONSOLE</span>
+            </div>
+            <div class="log-header-right">
+              <button class="btn-text-action" id="btnClearLog" aria-label="Clear Log">Clear</button>
+            </div>
+          </div>
+          <div class="log-box" id="logBox">
+            <div class="log-line system">&gt; Kinara Motion Capture Web Host Initialized [PyWebView Local Bridge Active]</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Horizontal Resizer Splitter (Main Stage vs Right Inspector) -->
+      <div class="splitter splitter-h" id="splitterHorizontal" title="Drag to resize sidebar panel (Double-click to reset)">
+        <div class="splitter-grip"></div>
+      </div>
+
+      <!-- Right Inspector & Configuration Tabs -->
+      <aside class="sidebar-section" id="sidebarSection">
+
+        <!-- PRESETS TAB -->
+        <div class="tab-content active" id="tab-presets">
+          <div class="tab-header-block">
+            <h2 class="tab-heading">Tracking Presets</h2>
+            <p class="tab-description">Choose a deep learning backend, adjust body & hand inference weights, and push configuration to the runtime execution parser.</p>
+          </div>
+
+          <!-- MediaPipe Preset -->
+          <div class="preset-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <div class="card-icon-badge cyan">MP</div>
+                <div>
+                  <span class="card-title">MediaPipe Pose</span>
+                  <span class="card-subtitle">Fast single-person CPU/GPU tracking</span>
+                </div>
+              </div>
+              <span class="card-badge badge-cyan">MediaPipe</span>
+            </div>
+            <p class="card-desc">Standard MediaPipe Pose & Hands. Lite runs ultra-fast, Heavy provides maximum landmark precision.</p>
+            <div class="card-controls">
+              <div class="card-col">
+                <label class="form-label" for="mpPoseOption">Pose Model</label>
+                <select class="form-control" id="mpPoseOption">
+                  <option value="Lite">Lite</option>
+                  <option value="Full" selected>Full</option>
+                  <option value="Heavy">Heavy</option>
+                </select>
+              </div>
+              <div class="card-col">
+                <label class="form-label" for="mpHandWeight">Hand Model</label>
+                <select class="form-control" id="mpHandWeight">
+                  <option value="Lite">Lite</option>
+                  <option value="Full" selected>Full</option>
+                  <option value="Heavy">Heavy</option>
+                </select>
+              </div>
+              <button class="btn btn-primary" id="btnApplyMediaPipe">Apply</button>
+            </div>
+          </div>
+
+          <!-- RTMPose Preset -->
+          <div class="preset-card highlighted">
+            <div class="card-header">
+              <div class="card-title-group">
+                <div class="card-icon-badge blue">RTM</div>
+                <div>
+                  <span class="card-title">RTMPose CUDA</span>
+                  <span class="card-subtitle">NVIDIA GPU Accelerated Tracking</span>
+                </div>
+              </div>
+              <span class="card-badge badge-blue">RECOMMENDED</span>
+            </div>
+            <p class="card-desc">High-speed RTMPose body pipeline paired with ONNX hand tracking for accurate multi-person motion.</p>
+            <div class="card-controls">
+              <div class="card-col">
+                <label class="form-label" for="rtmPoseOption">Pose Mode</label>
+                <select class="form-control" id="rtmPoseOption">
+                  <option value="Lite">Lite</option>
+                  <option value="Full" selected>Full</option>
+                  <option value="Heavy">Heavy</option>
+                </select>
+              </div>
+              <div class="card-col">
+                <label class="form-label" for="rtmHandWeight">Hand Weight</label>
+                <select class="form-control" id="rtmHandWeight">
+                  <option value="Lite">Lite</option>
+                  <option value="Full">Full</option>
+                  <option value="Heavy" selected>Heavy</option>
+                </select>
+              </div>
+              <button class="btn btn-primary" id="btnApplyRTMPose">Apply</button>
+            </div>
+          </div>
+
+          <!-- ONNX YOLO Preset -->
+          <div class="preset-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <div class="card-icon-badge purple">YOLO</div>
+                <div>
+                  <span class="card-title">Legacy ONNX YOLO</span>
+                  <span class="card-subtitle">Ultralytics YOLO Compatibility Path</span>
+                </div>
+              </div>
+              <span class="card-badge badge-purple">Legacy</span>
+            </div>
+            <p class="card-desc">Ultralytics YOLO body pose combined with ONNX hand tracking for baseline comparisons.</p>
+            <div class="card-controls">
+              <div class="card-col">
+                <label class="form-label" for="onnxYoloOption">YOLO Model</label>
+                <select class="form-control" id="onnxYoloOption">
+                  <option value="Nano">Nano</option>
+                  <option value="Small">Small</option>
+                  <option value="Medium">Medium</option>
+                  <option value="Large">Large</option>
+                  <option value="X-Large" selected>X-Large</option>
+                </select>
+              </div>
+              <div class="card-col">
+                <label class="form-label" for="onnxHandWeight">Hand Weight</label>
+                <select class="form-control" id="onnxHandWeight">
+                  <option value="Lite">Lite</option>
+                  <option value="Full">Full</option>
+                  <option value="Heavy" selected>Heavy</option>
+                </select>
+              </div>
+              <button class="btn btn-primary" id="btnApplyONNX">Apply</button>
+            </div>
+          </div>
+
+          <!-- RTMPose WholeBody Preset -->
+          <div class="preset-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <div class="card-icon-badge emerald">WB</div>
+                <div>
+                  <span class="card-title">RTMPose WholeBody</span>
+                  <span class="card-subtitle">Unified single-pass body + hand model</span>
+                </div>
+              </div>
+              <span class="card-badge badge-emerald">WholeBody</span>
+            </div>
+            <p class="card-desc">Single unified neural model detecting body points and both hands in one forward pass.</p>
+            <div class="card-controls">
+              <div class="card-col">
+                <label class="form-label" for="wholebodyOption">WholeBody Mode</label>
+                <select class="form-control" id="wholebodyOption">
+                  <option value="Lightweight">Lightweight</option>
+                  <option value="Balanced" selected>Balanced</option>
+                  <option value="Performance">Performance</option>
+                </select>
+              </div>
+              <button class="btn btn-primary" id="btnApplyWholeBody">Apply</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- CAPTURE TAB -->
+        <div class="tab-content" id="tab-capture">
+          <div class="tab-header-block">
+            <h2 class="tab-heading">Live Camera Capture</h2>
+            <p class="tab-description">Configure webcams, live video streams, and input capture index settings.</p>
+          </div>
+
+          <div class="config-card">
+            <div class="form-group">
+              <label class="form-label">Primary Camera Input</label>
+              <button class="btn btn-primary btn-block" id="btnUseCamera">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                Use Camera 0 (Webcam)
+              </button>
+              <div class="hint-card">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                <span>Use index <code>0</code> for default system webcam. For video files, load multiple items in the <strong>Files</strong> tab.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- FILES TAB -->
+        <div class="tab-content" id="tab-files">
+          <div class="tab-header-block">
+            <h2 class="tab-heading">Video Files & Destination</h2>
+            <p class="tab-description">Add recorded multi-camera MP4/MOV videos for triangulation or single-camera processing.</p>
+          </div>
+
+          <div class="config-card">
+            <div class="form-group">
+              <div class="form-label-row">
+                <label class="form-label">Input Video Sources</label>
+                <span class="label-badge">Multi-cam support</span>
+              </div>
+              <div class="action-btn-row">
+                <button class="btn btn-primary" id="btnAddFiles">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  Add Video Files
+                </button>
+                <button class="btn btn-secondary" id="btnClearFiles">Clear List</button>
+              </div>
+              <div class="source-list" id="fileSourceList">
+                <div class="source-item empty">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+                  <span>No video files added</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="destPathInput">Output Directory</label>
+              <div class="input-with-browse">
+                <input type="text" class="form-control" id="destPathInput" placeholder="Kinara output folder path..." readonly />
+                <button class="btn btn-secondary" id="btnBrowseDest">Browse...</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CALIBRATION TAB -->
+        <div class="tab-content" id="tab-calibration">
+          <div class="tab-header-block">
+            <h2 class="tab-heading">ChArUco Camera Calibration</h2>
+            <p class="tab-description">Solve multi-camera spatial intrinsic and extrinsic parameters using standard ChArUco boards.</p>
+          </div>
+
+          <div class="preset-card">
+            <div class="card-header">
+              <span class="card-title">Calibration Engine</span>
+              <span class="card-badge badge-amber">OpenCV ChArUco</span>
+            </div>
+            <p class="card-desc">Select synchronized calibration video files in Files tab, select paper size, and toggle Calibration Mode before running.</p>
+
+            <div class="toggle-group">
+              <label class="toggle-switch">
+                <input type="checkbox" id="chkCalibrateMode" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Enable Calibration Mode</span>
+              </label>
+            </div>
+
+            <div class="toggle-group">
+              <label class="toggle-switch">
+                <input type="checkbox" id="chkInstantTriangulation" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Triangulation</span>
+              </label>
+            </div>
+
+            <div class="toggle-group">
+              <label class="toggle-switch">
+                <input type="checkbox" id="chkRescueMode" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Rescue Mode</span>
+              </label>
+            </div>
+
+            <div class="form-group" style="margin-top:14px;">
+              <label class="form-label" for="paperSizeSelect">Paper Grid Size</label>
+              <select class="form-control" id="paperSizeSelect">
+                <option value="A3" selected>A3 (11x8 grid, 36mm square)</option>
+                <option value="A4">A4 (9x6 grid, 28mm square)</option>
+                <option value="Letter">Letter (9x6 grid, 26mm square)</option>
+                <option value="Legal">Legal (11x7 grid, 30mm square)</option>
+              </select>
+            </div>
+
+            <div class="card-controls" style="margin-top:16px;">
+              <button class="btn btn-primary btn-block" id="btnCalibA3" style="width:100%;">Apply</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- TRIANGULATION TAB -->
+        <div class="tab-content" id="tab-triangulation">
+          <div class="tab-header-block">
+            <h2 class="tab-heading">3D Spatial Triangulation</h2>
+            <p class="tab-description">Synthesize 2D skeletal predictions into global 3D world coordinates for Unreal Engine animation runtime.</p>
+          </div>
+
+          <div class="preset-card">
+            <div class="card-header">
+              <span class="card-title">3D World Solver</span>
+              <span class="card-badge badge-blue">Anipose 3D</span>
+            </div>
+            <p class="card-desc">Requires a valid <code>camera_calibration.toml</code> created from the calibration step.</p>
+
+            <div class="toggle-group" style="margin-bottom:16px;">
+              <label class="toggle-switch">
+                <input type="checkbox" id="chkEnableTriangulation" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Enable 3D Triangulation</span>
+              </label>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="triangulationPathInput">Calibration File (.toml)</label>
+              <div class="input-with-browse">
+                <input type="text" class="form-control" id="triangulationPathInput" placeholder="camera_calibration.toml" readonly />
+                <button class="btn btn-secondary" id="btnBrowseTriangulation">Browse...</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TUNE TAB (SINGLE-EXPANDABLE ACCORDION) -->
+        <div class="tab-content" id="tab-tune">
+          <div class="tab-header-block">
+            <h2 class="tab-heading">Engine Tuning &amp; Controls</h2>
+            <p class="tab-description">Configure all CLI model backends, inference precision, smoothing filters, detection thresholds, multi-person tracking, 3D triangulation, and camera calibration parameters.</p>
+          </div>
+
+          <div class="accordion-deck">
+            <!-- Card 1: Model Backend & Inference Precision -->
+            <div class="config-card accordion-card open" id="cardModel">
+              <div class="card-header accordion-header">
+                <span class="card-title">1. Model Backend &amp; Precision</span>
+                <svg class="accordion-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="accordion-body">
+                <div class="form-group">
+                  <label class="form-label" for="tuneBackendSelect">Body Pose Backend (--body-backend)</label>
+                  <select class="form-control" id="tuneBackendSelect">
+                    <option value="mediapipe" selected>MediaPipe Pose (CPU / GPU Default)</option>
+                    <option value="rtmpose">RTMPose (CUDA TensorRT / ONNX)</option>
+                    <option value="yolo">ONNX YOLO Pose (Fast Inference)</option>
+                    <option value="wholebody">RTMPose WholeBody (Full Body + Face + Hands)</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneModelVariantSelect">Body Model Variant (--body-model-variant)</label>
+                  <select class="form-control" id="tuneModelVariantSelect">
+                    <option value="full" selected>Full (Balanced Accuracy)</option>
+                    <option value="lite">Lite (Low Latency)</option>
+                    <option value="heavy">Heavy (High Precision)</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneHandBackendSelect">Hand Tracking Backend (--hand-backend)</label>
+                  <select class="form-control" id="tuneHandBackendSelect">
+                    <option value="mediapipe" selected>MediaPipe Hands</option>
+                    <option value="onnx">ONNX Local Hand Model</option>
+                    <option value="rtmpose-wholebody">RTMPose WholeBody Hands</option>
+                    <option value="none">Disabled (Pose Only)</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneHandWeightSelect">Hand Tracking Precision (--hand-model-variant)</label>
+                  <select class="form-control" id="tuneHandWeightSelect">
+                    <option value="Full" selected>Full (640px Input - High Precision)</option>
+                    <option value="Lite">Lite (512px Input - Low Latency)</option>
+                    <option value="Heavy">Heavy (768px Input - Maximum Resolution)</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneRtmposeModeSelect">RTMPose Model Mode (--rtmpose-mode)</label>
+                  <select class="form-control" id="tuneRtmposeModeSelect">
+                    <option value="balanced" selected>Balanced (Standard)</option>
+                    <option value="lightweight">Lightweight (Fastest)</option>
+                    <option value="performance">Performance (Maximum Joint Accuracy)</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneRtmposeDeviceSelect">Inference Device (--rtmpose-device)</label>
+                  <select class="form-control" id="tuneRtmposeDeviceSelect">
+                    <option value="cuda" selected>CUDA (NVIDIA GPU Acceleration)</option>
+                    <option value="cpu">CPU (Standard Processor Fallback)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 2: Resolution, Cadence & Speed -->
+            <div class="config-card accordion-card" id="cardPerformance">
+              <div class="card-header accordion-header">
+                <span class="card-title">2. Resolution, Speed &amp; Cadence</span>
+                <svg class="accordion-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="accordion-body">
+                <div class="form-group">
+                  <label class="form-label" for="tuneProcessingWidthSelect">Processing Downscale Width (--processing-width)</label>
+                  <select class="form-control" id="tuneProcessingWidthSelect">
+                    <option value="" selected>Original Source Resolution (0px)</option>
+                    <option value="1280">1280px (HD 720p Scale)</option>
+                    <option value="1024">1024px (Medium Scale)</option>
+                    <option value="768">768px (Fast Inference Scale)</option>
+                    <option value="640">640px (Ultra Fast Scale)</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneProfileSelect">Performance Profile (--profile)</label>
+                  <select class="form-control" id="tuneProfileSelect">
+                    <option value="fastest" selected>Fastest (Cadence Skip 2 Frames)</option>
+                    <option value="balanced">Balanced (Cadence Skip 1 Frame)</option>
+                    <option value="performance">Performance (Process Every Frame)</option>
+                  </select>
+                </div>
+
+                <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; margin-top:8px;">
+                  <label class="form-label" for="tuneFallbackChk" style="margin:0;">CPU Backend Fallback (--backend-fallbacks)</label>
+                  <input type="checkbox" id="tuneFallbackChk" style="width:18px; height:18px; cursor:pointer;" />
+                </div>
+
+                <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; margin-top:8px;">
+                  <label class="form-label" for="tuneYoloHalfChk" style="margin:0;">CUDA FP16 Half-Precision (--yolo-half)</label>
+                  <input type="checkbox" id="tuneYoloHalfChk" style="width:18px; height:18px; cursor:pointer;" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 3: Landmark Filtering & OneEuro Smoothing -->
+            <div class="config-card accordion-card" id="cardFiltering">
+              <div class="card-header accordion-header">
+                <span class="card-title">3. Landmark Filtering &amp; OneEuro Smoothing</span>
+                <svg class="accordion-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="accordion-body">
+                <div class="form-group">
+                  <label class="form-label" for="tuneMinCutoffInput">Min Cutoff Frequency (--one-euro-min-cutoff): <span id="minCutoffVal" style="color:var(--cyan);">1.0 Hz</span></label>
+                  <input type="range" class="form-control-range" id="tuneMinCutoffInput" min="0.1" max="5.0" step="0.1" value="1.0" />
+                  <span style="font-size:10px; color:var(--text-muted); display:block; margin-top:2px;">Lower values reduce jitter at rest; higher values reduce lag during motion.</span>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneBetaInput">Beta Smoothing Factor (--one-euro-beta): <span id="betaVal" style="color:var(--cyan);">0.007</span></label>
+                  <input type="range" class="form-control-range" id="tuneBetaInput" min="0.001" max="0.1" step="0.001" value="0.007" />
+                  <span style="font-size:10px; color:var(--text-muted); display:block; margin-top:2px;">Controls responsiveness during fast movements (0.001 smooth, 0.1 rapid).</span>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneDerivCutoffInput">Derivative Cutoff Frequency (--one-euro-d-cutoff): <span id="derivCutoffVal" style="color:var(--cyan);">1.0 Hz</span></label>
+                  <input type="range" class="form-control-range" id="tuneDerivCutoffInput" min="0.1" max="5.0" step="0.1" value="1.0" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 4: Detection Confidence & Thresholds -->
+            <div class="config-card accordion-card" id="cardThresholds">
+              <div class="card-header accordion-header">
+                <span class="card-title">4. Detection Confidence &amp; Thresholds</span>
+                <svg class="accordion-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="accordion-body">
+                <div class="form-group">
+                  <label class="form-label" for="tuneBodyConfInput">Body Confidence Threshold (--body-conf-threshold): <span id="bodyConfVal" style="color:var(--cyan);">0.30</span></label>
+                  <input type="range" class="form-control-range" id="tuneBodyConfInput" min="0.10" max="0.90" step="0.05" value="0.30" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneHandDetConfInput">Hand Detection Score (--hand-det-threshold): <span id="handDetConfVal" style="color:var(--cyan);">0.15</span></label>
+                  <input type="range" class="form-control-range" id="tuneHandDetConfInput" min="0.05" max="0.90" step="0.05" value="0.15" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneHandConfInput">Hand Keypoint Threshold (--hand-kp-threshold): <span id="handConfVal" style="color:var(--cyan);">0.20</span></label>
+                  <input type="range" class="form-control-range" id="tuneHandConfInput" min="0.05" max="0.90" step="0.05" value="0.20" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneHandBoxScaleInput">Hand Crop Box Scale (--hand-box-scale): <span id="handBoxScaleVal" style="color:var(--cyan);">2.0x</span></label>
+                  <input type="range" class="form-control-range" id="tuneHandBoxScaleInput" min="1.0" max="3.0" step="0.1" value="2.0" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 5: Multi-Person Tracking & Identity Tuning -->
+            <div class="config-card accordion-card" id="cardMultiPerson">
+              <div class="card-header accordion-header">
+                <span class="card-title">5. Multi-Person Tracking &amp; Identity</span>
+                <svg class="accordion-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="accordion-body">
+                <div class="form-group">
+                  <label class="form-label" for="peopleCountInput">Tracked People Count (--max-people) [1 - 12]</label>
+                  <div class="number-input-stepper">
+                    <input type="number" class="form-control" id="peopleCountInput" value="1" min="1" max="12" />
+                  </div>
+                  <div class="hint-card">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                    <span>For 2 or more people, specify clothing color tags below to pin person IDs stably.</span>
+                  </div>
+                </div>
+
+                <div id="peopleColorContainer" class="people-color-grid" style="margin-bottom:12px;"></div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tunePersonBoxScaleInput">Person Box Scale (--person-box-scale): <span id="personBoxScaleVal" style="color:var(--cyan);">1.15x</span></label>
+                  <input type="range" class="form-control-range" id="tunePersonBoxScaleInput" min="1.00" max="2.00" step="0.05" value="1.15" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneTrackHoldFramesInput">Track Hold Frames (--person-track-hold-frames): <span id="trackHoldVal" style="color:var(--cyan);">10 frames</span></label>
+                  <input type="range" class="form-control-range" id="tuneTrackHoldFramesInput" min="1" max="60" step="1" value="10" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneTrackMatchInput">Track Match Threshold (--person-match-threshold): <span id="trackMatchVal" style="color:var(--cyan);">0.15</span></label>
+                  <input type="range" class="form-control-range" id="tuneTrackMatchInput" min="0.05" max="0.80" step="0.05" value="0.15" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 6: 3D Triangulation & Camera Sync Tuning -->
+            <div class="config-card accordion-card" id="cardTriangulation">
+              <div class="card-header accordion-header">
+                <span class="card-title">6. 3D Triangulation &amp; Camera Sync</span>
+                <svg class="accordion-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="accordion-body">
+                <div class="form-group" style="display:flex; align-items:center; justify-content:space-between;">
+                  <label class="form-label" for="tuneEnableTriangulationChk" style="margin:0;">Enable 3D Triangulation (--triangulate-3d)</label>
+                  <input type="checkbox" id="tuneEnableTriangulationChk" style="width:18px; height:18px; cursor:pointer;" />
+                </div>
+
+                <div class="form-group" style="margin-top:12px;">
+                  <label class="form-label" for="tuneTriangulationMinCamsInput">Min Cameras for Joint Triangulation (--triangulation-min-cameras)</label>
+                  <input type="number" class="form-control" id="tuneTriangulationMinCamsInput" value="2" min="2" max="8" />
+                </div>
+
+                <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; margin-top:8px;">
+                  <label class="form-label" for="tuneTriangulationOutlierChk" style="margin:0;">Outlier View Rejection (--triangulation-use-outlier-rejection)</label>
+                  <input type="checkbox" id="tuneTriangulationOutlierChk" style="width:18px; height:18px; cursor:pointer;" />
+                </div>
+
+                <div class="form-group" style="margin-top:12px;">
+                  <label class="form-label" for="tuneTriangulationAlphaInput">3D Smoothing Factor (--triangulation-smoothing-alpha): <span id="triangulationAlphaVal" style="color:var(--cyan);">0.65</span></label>
+                  <input type="range" class="form-control-range" id="tuneTriangulationAlphaInput" min="0.10" max="0.95" step="0.05" value="0.65" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneCameraSyncInput">Camera Sync Frame Offsets (--sync-offset)</label>
+                  <input type="text" class="form-control" id="tuneCameraSyncInput" placeholder="e.g. CAM_1=3, CAM_2=-1" />
+                  <span style="font-size:10px; color:var(--text-muted); display:block; margin-top:4px;">Compensate for non-genlocked multi-camera shutter delays in frames.</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 7: ChArUco Camera Calibration Settings -->
+            <div class="config-card accordion-card" id="cardCalibration">
+              <div class="card-header accordion-header">
+                <span class="card-title">7. ChArUco Camera Calibration</span>
+                <svg class="accordion-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="accordion-body">
+                <div class="form-group" style="display:flex; align-items:center; justify-content:space-between;">
+                  <label class="form-label" for="tuneCalibrateModeChk" style="margin:0;">Calibrate Cameras Mode (--calibrate-cameras)</label>
+                  <input type="checkbox" id="tuneCalibrateModeChk" style="width:18px; height:18px; cursor:pointer;" />
+                </div>
+
+                <div class="form-group" style="margin-top:12px;">
+                  <label class="form-label" for="tunePaperSizeSelect">Paper Size Preset</label>
+                  <select class="form-control" id="tunePaperSizeSelect">
+                    <option value="A3" selected>A3 (11x8 grid, 36mm square)</option>
+                    <option value="A4">A4 (9x6 grid, 28mm square)</option>
+                    <option value="Letter">Letter (9x6 grid, 26mm square)</option>
+                    <option value="Legal">Legal (11x7 grid, 30mm square)</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneSquaresXInput">Board Squares X (--charuco-squares-x)</label>
+                  <input type="number" class="form-control" id="tuneSquaresXInput" value="11" min="3" max="25" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneSquaresYInput">Board Squares Y (--charuco-squares-y)</label>
+                  <input type="number" class="form-control" id="tuneSquaresYInput" value="8" min="3" max="25" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneSquareSizeInput">Square Size mm (--charuco-square-size)</label>
+                  <input type="number" class="form-control" id="tuneSquareSizeInput" value="36" min="5" max="200" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneCharucoStrictnessSelect">Detection Strictness (--charuco-detection-strictness)</label>
+                  <select class="form-control" id="tuneCharucoStrictnessSelect">
+                    <option value="balanced" selected>Balanced (Standard Retry)</option>
+                    <option value="strict">Strict (Fast Direct Pass)</option>
+                    <option value="lenient">Lenient (High Scale Retry)</option>
+                  </select>
+                </div>
+
+                <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; margin-top:8px;">
+                  <label class="form-label" for="tuneCharucoSharpenChk" style="margin:0;">Retry Frame Sharpening (--charuco-retry-sharpen)</label>
+                  <input type="checkbox" id="tuneCharucoSharpenChk" style="width:18px; height:18px; cursor:pointer;" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 8: Skeleton Styling & Network Output -->
+            <div class="config-card accordion-card" id="cardStylingNetwork">
+              <div class="card-header accordion-header">
+                <span class="card-title">8. Skeleton Styling &amp; Network Output</span>
+                <svg class="accordion-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="accordion-body">
+                <div class="form-group">
+                  <label class="form-label" for="tuneSkeletonThicknessSelect">Skeleton Line Thickness (--skeleton-thickness)</label>
+                  <select class="form-control" id="tuneSkeletonThicknessSelect">
+                    <option value="1">Thin (1px)</option>
+                    <option value="2" selected>Medium (2px)</option>
+                    <option value="4">Thick (4px)</option>
+                    <option value="6">Bold (6px)</option>
+                    <option value="8">Extra Bold (8px)</option>
+                  </select>
+                </div>
+
+                <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; margin-top:8px;">
+                  <label class="form-label" for="tuneOscEnabledChk" style="margin:0;">Enable Live OSC UDP Stream (--osc-enabled)</label>
+                  <input type="checkbox" id="tuneOscEnabledChk" style="width:18px; height:18px; cursor:pointer;" />
+                </div>
+
+                <div class="form-group" style="margin-top:12px;">
+                  <label class="form-label" for="tuneOscHostInput">Live OSC Target Host (--osc-host)</label>
+                  <input type="text" class="form-control" id="tuneOscHostInput" value="127.0.0.1" placeholder="127.0.0.1" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="tuneOscPortInput">Live OSC Target Port (--osc-port)</label>
+                  <input type="number" class="form-control" id="tuneOscPortInput" value="9000" min="1024" max="65535" />
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </aside>
+    </main>
+
+  <!-- Command Palette Modal Overlay (Raycast Style) -->
+  <div class="cmd-palette-overlay" id="cmdPaletteOverlay" style="display:none;">
+    <div class="cmd-palette-modal">
+      <div class="cmd-palette-search-row">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" class="cmd-search-icon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="cmdPaletteInput" placeholder="Type a command or search actions..." autocomplete="off" />
+        <kbd>Esc</kbd>
+      </div>
+      <div class="cmd-palette-results" id="cmdPaletteResults"></div>
+      <div class="cmd-palette-footer">
+        <span><kbd>↑</kbd> <kbd>↓</kbd> Navigate</span>
+        <span><kbd>↵</kbd> Execute</span>
+        <span><kbd>Esc</kbd> Close</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

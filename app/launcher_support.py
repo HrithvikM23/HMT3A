@@ -64,7 +64,7 @@ def _valid_python_executable(candidate: str) -> str | None:
     path = Path(candidate.strip().strip('"').strip("'"))
     if path.is_dir():
         path = path / "python.exe"
-    if not path.exists() or path.name.lower() != "python.exe":
+    if not path.exists() or path.name.lower() not in ("python.exe", "python3.11.exe", "python3.exe", "python", "python3.11", "python3"):
         return None
     try:
         completed = subprocess.run(
@@ -167,7 +167,7 @@ def app_icon_path(project_root: Path) -> Path | None:
         roots.append(project_root)
 
     for root in roots:
-        for relative in (Path("assets") / "kinara.ico", Path("assets") / "kinara-mark.png", Path("assets") / "kinara.png"):
+        for relative in (Path("assets") / "kinara-mark.png", Path("assets") / "logo.png", Path("assets") / "kinara.ico", Path("assets") / "kinara.png"):
             candidate = root / relative
             if candidate.exists():
                 return candidate

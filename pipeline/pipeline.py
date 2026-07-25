@@ -301,7 +301,7 @@ class PoseHandPipeline:
         boxes.append(primary_box)
         retry_count = max(0, self.config.hand_crop_retries)
         for retry_index in range(retry_count):
-            scale_multiplier = 2.4 + retry_index * 0.4
+            scale_multiplier = (1.3, 1.7, 2.2)[retry_index % 3] + (retry_index // 3) * 0.5
             forward_shift = (0.15, 0.35, 0.05)[retry_index % 3]
             boxes.append(
                 build_hand_box(

@@ -56,17 +56,8 @@ class BodyKinematicConstraints:
                 self._target_lengths[key] = length if previous is None else _blend(previous, length, alpha)
 
     def _mirror_segment_targets(self) -> None:
-        for segment_pairs in BODY_SEGMENT_GROUPS.values():
-            known_lengths = [
-                self._target_lengths[pair]
-                for pair in segment_pairs
-                if pair in self._target_lengths
-            ]
-            if len(known_lengths) < 2:
-                continue
-            shared_length = sum(known_lengths) / len(known_lengths)
-            for pair in segment_pairs:
-                self._target_lengths[pair] = shared_length
+        # 2D mirroring is disabled because perspective foreshortening makes it counterproductive
+        return
 
     def _apply_length_targets(self, points: list[Point]) -> None:
         correction = self.config.body_length_correction

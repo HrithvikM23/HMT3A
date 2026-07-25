@@ -97,6 +97,12 @@ def _write_calibration_report(
     error: object,
     all_rows: object,
 ) -> None:
+    mean_err = error
+    per_cam_errs = None
+    if isinstance(error, (tuple, list)) and len(error) == 2:
+        mean_err = error[0]
+        per_cam_errs = error[1]
+
     report_path = output_path.with_suffix(".quality.json")
     report = {
         "camera_labels": labels,
@@ -112,9 +118,9 @@ def _write_calibration_report(
             "detection_strictness": detection_strictness,
             "detection_retry": detector_settings,
         },
-        "mean_reprojection_error": _finite_float(error),
+        "mean_reprojection_error": _finite_float(mean_err),
         "detected_rows": _row_count(all_rows),
-        "advice": _quality_advice(_finite_float(error)),
+        "advice": _quality_advice(_finite_float(mean_err), per_cam_errs, labels),
     }
     with report_path.open("w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2)
@@ -161,7 +167,17 @@ def _validate_detected_rows(
         )
 
 
-def _quality_advice(error: float | None) -> list[str]:
+def _quality_advice(error: float | None, per_camera_errors: list[float] | None = None, labels: list[str] | None = None) -> list[str]:
+    if per_camera_errors and labels and len(per_camera_errors) == len(labels):
+        import statistics
+        try:
+            median = statistics.median(per_camera_errors)
+            for label, cam_err in zip(labels, per_camera_errors):
+                if cam_err > 2 * median:
+                    print(f"[calibration] WARNING: Camera '{label}' has high reprojection error ({cam_err:.3f}) vs median ({median:.3f}). Consider recalibrating this camera.")
+        except Exception:
+            pass
+
     if error is None:
         return ["Calibration saved, but no numeric reprojection error was reported by the backend."]
     if error <= 1.0:

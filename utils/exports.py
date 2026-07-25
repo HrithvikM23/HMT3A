@@ -4,6 +4,8 @@ import json
 import math
 import re
 import statistics
+
+
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
@@ -33,6 +35,8 @@ def _to_world_float(x: float, y: float, z: float = 0.0) -> tuple[float, float, f
 
 
 def _average_points(points: list[Point]) -> tuple[float, float, float, float]:
+    if not points:
+        return 0.0, 0.0, 0.0, 0.0
     point_count = len(points)
     sum_x = 0
     sum_y = 0
@@ -326,7 +330,12 @@ def _localize_joint_map(joint_map: JointMap) -> JointMap:
 
 
 def _frame_joint_map(frame: dict[str, object]) -> JointMap:
-    return cast(JointMap, frame["joints"])
+    if "joints" in frame:
+        return cast(JointMap, frame["joints"])
+    people = frame.get("people")
+    if isinstance(people, list) and people and isinstance(people[0], dict):
+        return cast(JointMap, people[0].get("joints", {}))
+    return cast(JointMap, frame.get("joints", {}))
 
 
 def _joint_is_valid(joint_value: JointValue, confidence_threshold: float = 0.05) -> bool:
@@ -386,9 +395,8 @@ def _ground_joint_frames(frames: list[dict[str, object]]) -> list[dict[str, obje
 
 
 def _z_up_joint_frames(frames: list[dict[str, object]]) -> list[dict[str, object]]:
-    grounded_frames = _ground_joint_frames(frames)
     z_up_frames: list[dict[str, object]] = []
-    for frame in grounded_frames:
+    for frame in frames:
         joints = frame["joints"]
         if not isinstance(joints, dict):
             z_up_frames.append(frame)
@@ -417,6 +425,8 @@ def _ground_z_axis_frames(frames: list[dict[str, object]]) -> list[dict[str, obj
 
 
 def _normalize_export_frames(frames: list[dict[str, object]]) -> list[dict[str, object]]:
+    if frames and "people" in frames[0]:
+        return _normalize_multi_person_frames(frames)
     return _ground_z_axis_frames(_z_up_joint_frames(frames))
 
 
@@ -450,6 +460,9 @@ def _compute_rest_joints(frames: list[dict[str, object]]) -> JointMap:
     else:
         rest_joints = {"HipsRoot": _zero_joint()}
 
+    bone_lengths: list[float] = []
+    joint_deltas: dict[str, tuple[float, float, float, float]] = {}
+
     for joint in SKELETON:
         if joint.parent is None:
             continue
@@ -474,11 +487,21 @@ def _compute_rest_joints(frames: list[dict[str, object]]) -> JointMap:
             delta_y = float(statistics.median(delta_ys))
             delta_z = float(statistics.median(delta_zs))
             delta_length = math.sqrt((delta_x * delta_x) + (delta_y * delta_y) + (delta_z * delta_z))
-            if delta_length <= 1e-6:
-                delta_x, delta_y, delta_z = 0.0, 0.0, 0.05
-            confidence = float(statistics.median(confidences))
+            if delta_length > 1e-6:
+                confidence = float(statistics.median(confidences))
+                joint_deltas[joint.name] = (delta_x, delta_y, delta_z, confidence)
+                bone_lengths.append(delta_length)
+
+    fallback_length = statistics.mean(bone_lengths) if bone_lengths else 0.05
+
+    for joint in SKELETON:
+        if joint.parent is None:
+            continue
+
+        if joint.name in joint_deltas:
+            delta_x, delta_y, delta_z, confidence = joint_deltas[joint.name]
         else:
-            delta_x, delta_y, delta_z = 0.0, 0.0, 0.05
+            delta_x, delta_y, delta_z = 0.0, 0.0, fallback_length
             confidence = 0.0
 
         parent_rest = rest_joints[joint.parent]
@@ -585,8 +608,16 @@ def _write_motion_json(
         "metadata": metadata,
         "frames": frames,
     }
-    with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
+    import os
+    tmp_path = output_path.with_suffix(output_path.suffix + '.tmp')
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        os.replace(str(tmp_path), str(output_path))
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
 
 
 def export_motion_json(
@@ -648,6 +679,60 @@ def _coerce_frame_index(value: object) -> int:
     return 0
 
 
+
+def _vector_length(x: float, y: float, z: float) -> float:
+    return math.sqrt(x * x + y * y + z * z)
+
+def _cross_product(ax: float, ay: float, az: float, bx: float, by: float, bz: float) -> tuple[float, float, float]:
+    return (ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx)
+
+def _dot_product(ax: float, ay: float, az: float, bx: float, by: float, bz: float) -> float:
+    return ax * bx + ay * by + az * bz
+
+def _axis_angle_to_euler_xyz(axis_x: float, axis_y: float, axis_z: float, angle: float) -> tuple[float, float, float]:
+    s = math.sin(angle / 2.0)
+    c = math.cos(angle / 2.0)
+    qx = axis_x * s
+    qy = axis_y * s
+    qz = axis_z * s
+    qw = c
+    sinr_cosp = 2.0 * (qw * qx + qy * qz)
+    cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+    x = math.atan2(sinr_cosp, cosr_cosp)
+    sinp = 2.0 * (qw * qy - qz * qx)
+    if abs(sinp) >= 1:
+        y = math.copysign(math.pi / 2, sinp)
+    else:
+        y = math.asin(sinp)
+    siny_cosp = 2.0 * (qw * qz + qx * qy)
+    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+    z = math.atan2(siny_cosp, cosy_cosp)
+    return math.degrees(x), math.degrees(y), math.degrees(z)
+
+def _compute_rotation_euler(rx: float, ry: float, rz: float, ax: float, ay: float, az: float) -> tuple[float, float, float]:
+    rl = _vector_length(rx, ry, rz)
+    al = _vector_length(ax, ay, az)
+    if rl < 1e-6 or al < 1e-6:
+        return 0.0, 0.0, 0.0
+    rnx, rny, rnz = rx / rl, ry / rl, rz / rl
+    anx, any, anz = ax / al, ay / al, az / al
+    dot = max(-1.0, min(1.0, _dot_product(rnx, rny, rnz, anx, any, anz)))
+    angle = math.acos(dot)
+    if angle < 1e-6:
+        return 0.0, 0.0, 0.0
+    if abs(dot + 1.0) < 1e-6:
+        if abs(rnx) > abs(rnz):
+            cx, cy, cz = -rny, rnx, 0.0
+        else:
+            cx, cy, cz = 0.0, -rnz, rny
+        cnl = _vector_length(cx, cy, cz)
+        return _axis_angle_to_euler_xyz(cx / cnl, cy / cnl, cz / cnl, math.pi)
+    cx, cy, cz = _cross_product(rnx, rny, rnz, anx, any, anz)
+    cl = _vector_length(cx, cy, cz)
+    if cl < 1e-6:
+        return 0.0, 0.0, 0.0
+    return _axis_angle_to_euler_xyz(cx / cl, cy / cl, cz / cl, angle)
+
 def export_multi_person_fbx_bundle(
     output_path: Path,
     fps: float,
@@ -698,10 +783,36 @@ def export_motion_fbx(output_path: Path, fps: float, frames: list[dict[str, obje
 
     if not frames_are_normalized:
         frames = _normalize_export_frames(frames)
+    rest_joints = _compute_rest_joints(frames)
     local_frames = [_localize_joint_map(_frame_joint_map(frame)) for frame in frames]
+    
+    rest_vectors = {}
+    for joint in SKELETON:
+        if joint.parent is not None:
+            p_rest = rest_joints[joint.parent]
+            c_rest = rest_joints[joint.name]
+            rest_vectors[joint.name] = (
+                c_rest["x"] - p_rest["x"],
+                c_rest["y"] - p_rest["y"],
+                c_rest["z"] - p_rest["z"]
+            )
+            
+    rot_frames = []
+    for local_map in local_frames:
+        rot_map = {}
+        for joint in SKELETON:
+            if joint.parent is None:
+                rot_map[joint.name] = {"x": 0.0, "y": 0.0, "z": 0.0}
+            else:
+                ax, ay, az = local_map[joint.name]["x"], local_map[joint.name]["y"], local_map[joint.name]["z"]
+                rx, ry, rz = rest_vectors[joint.name]
+                rot_x, rot_y, rot_z = _compute_rotation_euler(rx, ry, rz, ax, ay, az)
+                rot_map[joint.name] = {"x": rot_x, "y": rot_y, "z": rot_z}
+        rot_frames.append(rot_map)
+
     model_ids: dict[str, int] = {}
-    curve_node_ids: dict[str, int] = {}
-    curve_ids: dict[tuple[str, str], int] = {}
+    curve_node_ids: dict[tuple[str, str], int] = {}
+    curve_ids: dict[tuple[str, str, str], int] = {}
     animation_stack_id = 100000
     animation_layer_id = 100001
     next_id = 100100
@@ -710,11 +821,18 @@ def export_motion_fbx(output_path: Path, fps: float, frames: list[dict[str, obje
         model_ids[joint.name] = next_id
         next_id += 1
     for joint in SKELETON:
-        curve_node_ids[joint.name] = next_id
+        curve_node_ids[(joint.name, "T")] = next_id
         next_id += 1
         for axis in ("X", "Y", "Z"):
-            curve_ids[(joint.name, axis)] = next_id
+            curve_ids[(joint.name, axis, "T")] = next_id
             next_id += 1
+        
+        if joint.parent is not None:
+            curve_node_ids[(joint.name, "R")] = next_id
+            next_id += 1
+            for axis in ("X", "Y", "Z"):
+                curve_ids[(joint.name, axis, "R")] = next_id
+                next_id += 1
 
     key_times = [int(round((frame_index / max(fps, 1.0)) * FBX_TIME_UNIT)) for frame_index in range(len(local_frames))]
 
@@ -743,37 +861,41 @@ def export_motion_fbx(output_path: Path, fps: float, frames: list[dict[str, obje
         lines.append("  }")
 
     for joint in SKELETON:
-        curve_node_id = curve_node_ids[joint.name]
-        lines.append(f'  AnimationCurveNode: {curve_node_id}, "AnimCurveNode::{joint.name}_T", "" {{')
-        lines.append("    Properties70:  {")
-        lines.append('      P: "d|X", "Number", "", "A",0')
-        lines.append('      P: "d|Y", "Number", "", "A",0')
-        lines.append('      P: "d|Z", "Number", "", "A",0')
-        lines.append("    }")
-        lines.append("  }")
-
-        for axis in ("X", "Y", "Z"):
-            curve_id = curve_ids[(joint.name, axis)]
-            values = [local_frame[joint.name][axis.lower()] for local_frame in local_frames]
-            lines.append(f'  AnimationCurve: {curve_id}, "AnimCurve::{joint.name}_T_{axis}", "" {{')
-            lines.append("    Default: 0")
-            lines.append("    KeyVer: 4008")
-            lines.append(f"    KeyTime: *{len(key_times)} {{")
-            lines.append("      a: " + ",".join(str(value) for value in key_times))
-            lines.append("    }")
-            lines.append(f"    KeyValueFloat: *{len(values)} {{")
-            lines.append("      a: " + ",".join(f"{value:.6f}" for value in values))
-            lines.append("    }")
-            lines.append(f"    KeyAttrFlags: *{len(values)} {{")
-            lines.append("      a: " + ",".join("24836" for _ in values))
-            lines.append("    }")
-            lines.append(f"    KeyAttrDataFloat: *{len(values) * 4} {{")
-            lines.append("      a: " + ",".join("0,0,255790911,0" for _ in values))
-            lines.append("    }")
-            lines.append(f"    KeyAttrRefCount: *{len(values)} {{")
-            lines.append("      a: " + ",".join("1" for _ in values))
+        for p_type, suffix, map_list in [("T", "T", local_frames), ("R", "R", rot_frames)]:
+            if p_type == "R" and joint.parent is None:
+                continue
+            
+            curve_node_id = curve_node_ids[(joint.name, p_type)]
+            lines.append(f'  AnimationCurveNode: {curve_node_id}, "AnimCurveNode::{joint.name}_{suffix}", "" {{')
+            lines.append("    Properties70:  {")
+            lines.append('      P: "d|X", "Number", "", "A",0')
+            lines.append('      P: "d|Y", "Number", "", "A",0')
+            lines.append('      P: "d|Z", "Number", "", "A",0')
             lines.append("    }")
             lines.append("  }")
+
+            for axis in ("X", "Y", "Z"):
+                curve_id = curve_ids[(joint.name, axis, p_type)]
+                values = [frame[joint.name][axis.lower()] for frame in map_list]
+                lines.append(f'  AnimationCurve: {curve_id}, "AnimCurve::{joint.name}_{suffix}_{axis}", "" {{')
+                lines.append("    Default: 0")
+                lines.append("    KeyVer: 4008")
+                lines.append(f"    KeyTime: *{len(key_times)} {{")
+                lines.append("      a: " + ",".join(str(value) for value in key_times))
+                lines.append("    }")
+                lines.append(f"    KeyValueFloat: *{len(values)} {{")
+                lines.append("      a: " + ",".join(f"{value:.6f}" for value in values))
+                lines.append("    }")
+                lines.append(f"    KeyAttrFlags: *{len(values)} {{")
+                lines.append("      a: " + ",".join("24836" for _ in values))
+                lines.append("    }")
+                lines.append(f"    KeyAttrDataFloat: *{len(values) * 4} {{")
+                lines.append("      a: " + ",".join("0,0,0,0" for _ in values))
+                lines.append("    }")
+                lines.append(f"    KeyAttrRefCount: *{len(values)} {{")
+                lines.append("      a: " + ",".join("1" for _ in values))
+                lines.append("    }")
+                lines.append("  }")
 
     lines.append("}")
     lines.append("Connections:  {")
@@ -781,10 +903,25 @@ def export_motion_fbx(output_path: Path, fps: float, frames: list[dict[str, obje
     for joint in SKELETON:
         parent_id = 0 if joint.parent is None else model_ids[joint.parent]
         lines.append(f'  C: "OO",{model_ids[joint.name]},{parent_id}')
-        lines.append(f'  C: "OO",{curve_node_ids[joint.name]},{animation_layer_id}')
-        lines.append(f'  C: "OP",{curve_node_ids[joint.name]},{model_ids[joint.name]},"Lcl Translation"')
+        
+        lines.append(f'  C: "OO",{curve_node_ids[(joint.name, "T")]},{animation_layer_id}')
+        lines.append(f'  C: "OP",{curve_node_ids[(joint.name, "T")]},{model_ids[joint.name]},"Lcl Translation"')
         for axis in ("X", "Y", "Z"):
-            lines.append(f'  C: "OP",{curve_ids[(joint.name, axis)]},{curve_node_ids[joint.name]},"d|{axis}"')
+            lines.append(f'  C: "OP",{curve_ids[(joint.name, axis, "T")]},{curve_node_ids[(joint.name, "T")]},"d|{axis}"')
+            
+        if joint.parent is not None:
+            lines.append(f'  C: "OO",{curve_node_ids[(joint.name, "R")]},{animation_layer_id}')
+            lines.append(f'  C: "OP",{curve_node_ids[(joint.name, "R")]},{model_ids[joint.name]},"Lcl Rotation"')
+            for axis in ("X", "Y", "Z"):
+                lines.append(f'  C: "OP",{curve_ids[(joint.name, axis, "R")]},{curve_node_ids[(joint.name, "R")]},"d|{axis}"')
     lines.append("}")
 
-    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    import os
+    tmp_path = output_path.with_suffix(output_path.suffix + '.tmp')
+    try:
+        tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.replace(str(tmp_path), str(output_path))
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise

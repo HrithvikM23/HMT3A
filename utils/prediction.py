@@ -41,7 +41,9 @@ def translate_points(points: list[Point], offset_x: float, offset_y: float, conf
     ]
 
 
-def translate_box(box: Box, offset_x: float, offset_y: float) -> Box:
+def translate_box(box: Box | None, offset_x: float, offset_y: float) -> Box | None:
+    if box is None:
+        return None
     x1, y1, x2, y2 = box
     return (
         int(round(x1 + offset_x)),
