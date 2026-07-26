@@ -10,6 +10,19 @@
   <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
   <link rel="icon" type="image/png" href="assets/kinara-mark.png">
   <link rel="stylesheet" href="style.css">
+  <script>
+    (function () {
+      const REF_W = 1920;
+      const REF_H = 1080;
+      function updateAppScale() {
+        const scale = Math.min(window.innerWidth / REF_W, window.innerHeight / REF_H);
+        document.documentElement.style.setProperty('--app-scale', scale);
+      }
+      updateAppScale();
+      window.addEventListener('resize', updateAppScale);
+      window.addEventListener('DOMContentLoaded', updateAppScale);
+    })();
+  </script>
 </head>
 <body>
 
@@ -863,6 +876,7 @@
       </div>
     </div>
   </div>
+</div>
 
   <script src="app.js"></script>
 </body>
