@@ -11,7 +11,9 @@ document.addEventListener('DOMContentLoaded', () => {
     status: 'Idle',
     isCustomCommand: false,
     cameraFrames: {},
+    workerFrames: {},
     activeCamera: 'CAM_0',
+    activeWorker: 'ALL',
   };
 
   // DOM Elements
@@ -77,12 +79,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Helper: Append Formatted Log Lines
   function appendLog(message, type = 'normal') {
-    if (!message) return;
-    const line = document.createElement('div');
-    line.className = `log-line ${type}`;
-    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
-    line.textContent = `[${timestamp}] ${message}`;
-    logBox.appendChild(line);
+    if (!message || !logBox) return;
+    const lines = String(message).split(/\r?\n/);
+    lines.forEach(str => {
+      const trimmed = str.trimEnd();
+      if (!trimmed && lines.length > 1) return;
+      const line = document.createElement('div');
+      line.className = `log-line ${type}`;
+      const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+      line.textContent = `[${timestamp}] ${trimmed}`;
+      logBox.appendChild(line);
+    });
     logBox.scrollTop = logBox.scrollHeight;
   }
 
@@ -172,7 +179,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (previewPlaceholder) previewPlaceholder.style.display = 'none';
     if (livePreviewImg) livePreviewImg.style.display = 'block';
     appendLog('Starting Kinara Motion Tracking Pipeline...', 'system');
-    const result = await callPy('start_run');
+    const customCmd = state.isCustomCommand ? cmdInput?.value : null;
+    const result = await callPy('start_run', customCmd);
     if (result && result.log) appendLog(result.log);
   });
 
@@ -196,6 +204,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   btnResetDefaults?.addEventListener('click', async () => {
+    state.isCustomCommand = false;
+    const tuneWorkersInput = document.getElementById('tuneWorkersInput');
+    if (tuneWorkersInput) tuneWorkersInput.value = 0;
     const cmd = await callPy('reset_defaults');
     if (cmd) updateCommandUI(cmd);
     if (peopleCountInput) peopleCountInput.value = 1;
@@ -211,6 +222,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (chkRescueMode) chkRescueMode.checked = false;
     if (chkEnableTriangulation) chkEnableTriangulation.checked = false;
     if (paperSizeSelect) paperSizeSelect.value = 'A3';
+    const tuneExecutionModeSelect = document.getElementById('tuneExecutionModeSelect');
+    if (tuneExecutionModeSelect) tuneExecutionModeSelect.value = 'auto';
     setStatus('Defaults Restored');
     appendLog('All configuration parameters restored to default.', 'system');
   });
@@ -345,6 +358,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const tuneProfileSelect = document.getElementById('tuneProfileSelect');
   const tuneFallbackChk = document.getElementById('tuneFallbackChk');
   const tuneYoloHalfChk = document.getElementById('tuneYoloHalfChk');
+  const tuneExecutionModeSelect = document.getElementById('tuneExecutionModeSelect');
 
   const tuneMinCutoffInput = document.getElementById('tuneMinCutoffInput');
   const tuneBetaInput = document.getElementById('tuneBetaInput');
@@ -390,8 +404,49 @@ document.addEventListener('DOMContentLoaded', () => {
   tuneProcessingWidthSelect?.addEventListener('change', (e) => syncOption('processing_width', e.target.value));
   tuneProfileSelect?.addEventListener('change', (e) => callPy('set_profile', e.target.value).then(cmd => { if (cmd) updateCommandUI(cmd); }));
 
-  tuneFallbackChk?.addEventListener('change', (e) => syncOption('backend_fallbacks', e.target.checked));
-  tuneYoloHalfChk?.addEventListener('change', (e) => syncOption('yolo_half', e.target.checked));
+  const tuneWorkersInput = document.getElementById('tuneWorkersInput');
+  const tuneMaxCpuInput = document.getElementById('tuneMaxCpuInput');
+
+  cmdInput?.addEventListener('input', () => {
+    state.isCustomCommand = true;
+  });
+
+  tuneWorkersInput?.addEventListener('input', (e) => {
+    state.isCustomCommand = false;
+    let val = parseInt(e.target.value) || 0;
+    const maxVal = parseInt(e.target.max) || 64;
+    if (val > maxVal) {
+      val = maxVal;
+      e.target.value = val;
+    }
+    callPy('set_parallel_workers', val).then(cmd => { if (cmd) updateCommandUI(cmd); });
+  });
+
+  tuneMaxCpuInput?.addEventListener('input', (e) => {
+    state.isCustomCommand = false;
+    let val = parseFloat(e.target.value) || 60.0;
+    if (val > 100.0) {
+      val = 100.0;
+      e.target.value = 100;
+    }
+    val = Math.max(10.0, val);
+    callPy('set_max_cpu_percent', val).then(cmd => { if (cmd) updateCommandUI(cmd); });
+  });
+
+  tuneMaxCpuInput?.addEventListener('blur', (e) => {
+    let val = parseFloat(e.target.value) || 60.0;
+    if (val > 100.0) {
+      val = 100.0;
+      e.target.value = 100;
+    } else if (val < 10.0) {
+      val = 10.0;
+      e.target.value = 10;
+    }
+  });
+
+  tuneFallbackChk?.addEventListener('change', (e) => { state.isCustomCommand = false; syncOption('backend_fallbacks', e.target.checked); });
+  tuneYoloHalfChk?.addEventListener('change', (e) => { state.isCustomCommand = false; syncOption('yolo_half', e.target.checked); });
+  tuneExecutionModeSelect?.addEventListener('change', (e) => { state.isCustomCommand = false; callPy('set_execution_mode', e.target.value).then(cmd => { if (cmd) updateCommandUI(cmd); }); });
 
   tuneMinCutoffInput?.addEventListener('input', (e) => {
     const val = e.target.value;
@@ -525,26 +580,130 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateCameraTabsUI() {
     if (!cameraTabsContainer) return;
     cameraTabsContainer.innerHTML = '';
+
     const cams = state.sources.length > 0 ? state.sources.map((_, idx) => `CAM_${idx}`) : ['CAM_0'];
+    const workerKeys = Object.keys(state.workerFrames).sort();
 
     if (!cams.includes(state.activeCamera)) {
       state.activeCamera = cams[0];
     }
 
-    if (activeCamTitle) activeCamTitle.textContent = state.activeCamera;
+    if (activeCamTitle) {
+      activeCamTitle.textContent = state.activeWorker === 'ALL' ? 'WORKER GRID VIEW' : (state.activeWorker !== 'MAIN' ? state.activeWorker.replace('_', ' ') : state.activeCamera);
+    }
 
     cams.forEach((camId) => {
       const btn = document.createElement('button');
-      btn.className = `cam-tab ${camId === state.activeCamera ? 'active' : ''}`;
+      btn.className = `cam-tab ${camId === state.activeCamera && state.activeWorker !== 'ALL' ? 'active' : ''}`;
       btn.setAttribute('data-cam', camId);
       btn.textContent = camId;
       btn.addEventListener('click', () => {
         state.activeCamera = camId;
+        state.activeWorker = 'MAIN';
         updateCameraTabsUI();
+        resetToSingleTileView();
         displayActiveCameraFrame();
       });
       cameraTabsContainer.appendChild(btn);
     });
+
+    if (workerKeys.length > 1) {
+      const gridBtn = document.createElement('button');
+      gridBtn.className = `cam-tab ${state.activeWorker === 'ALL' ? 'active' : ''}`;
+      gridBtn.textContent = 'GRID VIEW';
+      gridBtn.addEventListener('click', () => {
+        state.activeWorker = 'ALL';
+        updateCameraTabsUI();
+        renderWorkerGrid();
+      });
+      cameraTabsContainer.appendChild(gridBtn);
+
+      workerKeys.forEach((wId) => {
+        const btn = document.createElement('button');
+        btn.className = `cam-tab ${state.activeWorker === wId ? 'active' : ''}`;
+        btn.textContent = wId.replace('_', ' ');
+        btn.addEventListener('click', () => {
+          state.activeWorker = wId;
+          updateCameraTabsUI();
+          resetToSingleTileView();
+          const frame = state.workerFrames[wId];
+          if (frame) {
+            const liveImg = document.getElementById('livePreviewImg');
+            const placeholder = document.getElementById('previewPlaceholder');
+            if (liveImg) {
+              liveImg.src = `data:image/jpeg;base64,${frame}`;
+              if (placeholder) placeholder.style.display = 'none';
+              liveImg.style.display = 'block';
+            }
+          }
+        });
+        cameraTabsContainer.appendChild(btn);
+      });
+    }
+  }
+
+  function resetToSingleTileView() {
+    const videoGrid = document.getElementById('videoGrid');
+    if (!videoGrid) return;
+    videoGrid.className = 'video-grid';
+    if (!document.getElementById('tileMain')) {
+      videoGrid.innerHTML = `
+        <div class="video-tile" id="tileMain">
+          <div class="tile-header">
+            <span class="pulse-indicator"></span>
+            <span id="activeCamTitle">${state.activeWorker === 'MAIN' ? state.activeCamera : state.activeWorker.replace('_', ' ')}</span>
+            <span class="tile-badge">LIVE STREAM</span>
+            <span id="hudFrame" class="tile-badge" style="font-family: var(--font-mono);">00000</span>
+          </div>
+          <div class="tile-placeholder" id="previewPlaceholder">
+            <div class="radar-scan"></div>
+            <svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.5" class="placeholder-icon">
+              <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+            <div class="placeholder-text nothing-font">Awaiting Live Motion Stream</div>
+            <div class="placeholder-sub">Processed camera frames &amp; skeleton overlays stream live in real time</div>
+          </div>
+          <img id="livePreviewImg" class="live-preview-img" style="display:none;" alt="Live Motion Frame" />
+        </div>`;
+    }
+  }
+
+  function renderWorkerGrid() {
+    const workerKeys = Object.keys(state.workerFrames);
+    if (workerKeys.length <= 1 || state.activeWorker !== 'ALL') return;
+
+    const videoGrid = document.getElementById('videoGrid');
+    if (!videoGrid) return;
+
+    videoGrid.className = 'video-grid grid-workers';
+    videoGrid.innerHTML = '';
+
+    workerKeys.sort().forEach((wId) => {
+      const tile = document.createElement('div');
+      tile.className = 'video-tile worker-tile';
+      tile.id = `workerTile_${wId}`;
+      const b64 = state.workerFrames[wId] || '';
+      tile.innerHTML = `
+        <div class="tile-header worker-tile-header">
+          <span class="pulse-indicator"></span>
+          <span>${wId.replace('_', ' ')}</span>
+          <span class="tile-badge">CHUNK WORKER</span>
+        </div>
+        <img class="live-preview-img" style="display:${b64 ? 'block' : 'none'};" src="${b64 ? 'data:image/jpeg;base64,' + b64 : ''}" alt="${wId}" />
+      `;
+      videoGrid.appendChild(tile);
+    });
+  }
+
+  function updateWorkerTile(workerId, base64Img) {
+    const tile = document.getElementById(`workerTile_${workerId}`);
+    if (tile) {
+      const img = tile.querySelector('img');
+      if (img) {
+        img.src = `data:image/jpeg;base64,${base64Img}`;
+        img.style.display = 'block';
+      }
+    }
   }
 
   function displayActiveCameraFrame() {
@@ -586,8 +745,10 @@ document.addEventListener('DOMContentLoaded', () => {
     updateCameraTabsUI();
   }
 
-  function updateCommandUI(commandString) {
-    if (cmdInput) cmdInput.value = commandString;
+  function updateCommandUI(commandString, force = true) {
+    if (force || !state.isCustomCommand) {
+      if (cmdInput) cmdInput.value = commandString;
+    }
   }
 
   // PyWebView Event Listeners from Python Host
@@ -595,6 +756,14 @@ document.addEventListener('DOMContentLoaded', () => {
     appendLog('PyWebView Native Desktop Bridge Ready', 'system');
     const initCmd = await callPy('get_initial_command');
     if (initCmd) updateCommandUI(initCmd);
+
+    try {
+      const sysInfo = await callPy('get_system_info');
+      if (sysInfo && tuneWorkersInput) {
+        tuneWorkersInput.max = sysInfo.cpu_count;
+        tuneWorkersInput.placeholder = `0 = Auto (60% Cap: ${sysInfo.cpu_60_cap} Cores, Max: ${sysInfo.cpu_count})`;
+      }
+    } catch (e) {}
   });
 
   // Real-time log & status events emitted from Python Host
@@ -610,28 +779,43 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.resetPreviewStage = () => {
     state.cameraFrames = {};
+    state.workerFrames = {};
+    state.activeWorker = 'ALL';
     frameCounter = 0;
-    if (livePreviewImg) {
-      livePreviewImg.src = '';
-      livePreviewImg.style.display = 'none';
-    }
+    resetToSingleTileView();
     if (previewPlaceholder) {
       previewPlaceholder.style.display = 'flex';
     }
     const hudFrame = document.getElementById('hudFrame');
     if (hudFrame) hudFrame.textContent = '00000';
+    updateCameraTabsUI();
   };
 
-  window.onKinaraPreviewFrame = (base64Img, camId = 'CAM_0') => {
+  window.onKinaraPreviewFrame = (base64Img, camId = 'CAM_0', workerId = 'WORKER_0') => {
     if (!base64Img) return;
     const targetCam = camId && camId.trim() ? camId : 'CAM_0';
-    state.cameraFrames[targetCam] = base64Img;
+    const targetWorker = workerId && workerId.trim() ? workerId : 'WORKER_0';
 
-    if (targetCam === state.activeCamera) {
-      if (livePreviewImg) {
-        livePreviewImg.src = `data:image/jpeg;base64,${base64Img}`;
-        if (previewPlaceholder) previewPlaceholder.style.display = 'none';
-        livePreviewImg.style.display = 'block';
+    const isNewWorker = !state.workerFrames[targetWorker];
+    state.cameraFrames[targetCam] = base64Img;
+    state.workerFrames[targetWorker] = base64Img;
+
+    if (isNewWorker) {
+      updateCameraTabsUI();
+      if (state.activeWorker === 'ALL' && Object.keys(state.workerFrames).length > 1) {
+        renderWorkerGrid();
+      }
+    } else {
+      updateWorkerTile(targetWorker, base64Img);
+    }
+
+    if (targetCam === state.activeCamera || state.activeWorker === targetWorker) {
+      const liveImg = document.getElementById('livePreviewImg');
+      const placeholder = document.getElementById('previewPlaceholder');
+      if (liveImg) {
+        liveImg.src = `data:image/jpeg;base64,${base64Img}`;
+        if (placeholder) placeholder.style.display = 'none';
+        liveImg.style.display = 'block';
 
         frameCounter++;
         const hudFrame = document.getElementById('hudFrame');
@@ -829,6 +1013,43 @@ document.addEventListener('DOMContentLoaded', () => {
     { title: '🎛 Open Engine Tuning Controls', category: 'Tune', action: () => document.querySelector('.tab-btn[data-tab="tune"]')?.click() },
     { title: '🧹 Clear Terminal Console Logs', category: 'Console', action: () => btnClearLog?.click() },
     { title: '↻ Reset Default Pipeline Settings', category: 'System', action: () => btnResetDefaults?.click() },
+    // Execution Mode
+    { title: '🔀 Processing Mode: Auto', category: 'Tune', action: () => { const el = document.getElementById('tuneExecutionModeSelect'); if (el) { el.value = 'auto'; el.dispatchEvent(new Event('change')); } } },
+    { title: '🔀 Processing Mode: Serial', category: 'Tune', action: () => { const el = document.getElementById('tuneExecutionModeSelect'); if (el) { el.value = 'serial'; el.dispatchEvent(new Event('change')); } } },
+    { title: '🔀 Processing Mode: Parallel', category: 'Tune', action: () => { const el = document.getElementById('tuneExecutionModeSelect'); if (el) { el.value = 'parallel'; el.dispatchEvent(new Event('change')); } } },
+    { title: '🔀 Processing Mode: Pipeline Parallel', category: 'Tune', action: () => { const el = document.getElementById('tuneExecutionModeSelect'); if (el) { el.value = 'pipeline-parallel'; el.dispatchEvent(new Event('change')); } } },
+    // Body Backend
+    { title: '🦴 Body Backend: MediaPipe', category: 'Tune', action: () => { const el = document.getElementById('tuneBackendSelect'); if (el) { el.value = 'mediapipe'; el.dispatchEvent(new Event('change')); } } },
+    { title: '🦴 Body Backend: RTMPose', category: 'Tune', action: () => { const el = document.getElementById('tuneBackendSelect'); if (el) { el.value = 'rtmpose'; el.dispatchEvent(new Event('change')); } } },
+    { title: '🦴 Body Backend: YOLO', category: 'Tune', action: () => { const el = document.getElementById('tuneBackendSelect'); if (el) { el.value = 'yolo'; el.dispatchEvent(new Event('change')); } } },
+    { title: '🦴 Body Backend: WholeBody', category: 'Tune', action: () => { const el = document.getElementById('tuneBackendSelect'); if (el) { el.value = 'wholebody'; el.dispatchEvent(new Event('change')); } } },
+    // Hand Backend
+    { title: '✋ Hand Backend: MediaPipe', category: 'Tune', action: () => { const el = document.getElementById('tuneHandBackendSelect'); if (el) { el.value = 'mediapipe'; el.dispatchEvent(new Event('change')); } } },
+    { title: '✋ Hand Backend: ONNX', category: 'Tune', action: () => { const el = document.getElementById('tuneHandBackendSelect'); if (el) { el.value = 'onnx'; el.dispatchEvent(new Event('change')); } } },
+    { title: '✋ Hand Backend: RTMPose WholeBody', category: 'Tune', action: () => { const el = document.getElementById('tuneHandBackendSelect'); if (el) { el.value = 'rtmpose-wholebody'; el.dispatchEvent(new Event('change')); } } },
+    { title: '✋ Hand Backend: Disabled', category: 'Tune', action: () => { const el = document.getElementById('tuneHandBackendSelect'); if (el) { el.value = 'none'; el.dispatchEvent(new Event('change')); } } },
+    // Inference Device
+    { title: '🖥 Inference Device: CUDA GPU', category: 'Tune', action: () => { const el = document.getElementById('tuneRtmposeDeviceSelect'); if (el) { el.value = 'cuda'; el.dispatchEvent(new Event('change')); } } },
+    { title: '🖥 Inference Device: CPU', category: 'Tune', action: () => { const el = document.getElementById('tuneRtmposeDeviceSelect'); if (el) { el.value = 'cpu'; el.dispatchEvent(new Event('change')); } } },
+    // Performance Profile
+    { title: '⚡ Profile: Fastest', category: 'Tune', action: () => { const el = document.getElementById('tuneProfileSelect'); if (el) { el.value = 'fastest'; el.dispatchEvent(new Event('change')); } } },
+    { title: '⚡ Profile: Mid (Balanced)', category: 'Tune', action: () => { const el = document.getElementById('tuneProfileSelect'); if (el) { el.value = 'mid'; el.dispatchEvent(new Event('change')); } } },
+    { title: '⚡ Profile: Quality', category: 'Tune', action: () => { const el = document.getElementById('tuneProfileSelect'); if (el) { el.value = 'quality'; el.dispatchEvent(new Event('change')); } } },
+    // Processing Resolution
+    { title: '📐 Resolution: Original', category: 'Tune', action: () => { const el = document.getElementById('tuneProcessingWidthSelect'); if (el) { el.value = ''; el.dispatchEvent(new Event('change')); } } },
+    { title: '📐 Resolution: 1280px HD', category: 'Tune', action: () => { const el = document.getElementById('tuneProcessingWidthSelect'); if (el) { el.value = '1280'; el.dispatchEvent(new Event('change')); } } },
+    { title: '📐 Resolution: 640px Ultra Fast', category: 'Tune', action: () => { const el = document.getElementById('tuneProcessingWidthSelect'); if (el) { el.value = '640'; el.dispatchEvent(new Event('change')); } } },
+    // Toggles
+    { title: '🔁 Toggle CPU Backend Fallback', category: 'Tune', action: () => { const el = document.getElementById('tuneFallbackChk'); if (el) { el.checked = !el.checked; el.dispatchEvent(new Event('change')); } } },
+    { title: '🔁 Toggle CUDA FP16 Half-Precision', category: 'Tune', action: () => { const el = document.getElementById('tuneYoloHalfChk'); if (el) { el.checked = !el.checked; el.dispatchEvent(new Event('change')); } } },
+    // Tab Navigation shortcuts
+    { title: '📋 Go to Capture Tab', category: 'Navigation', action: () => document.querySelector('.tab-btn[data-tab="capture"]')?.click() },
+    { title: '📋 Go to Preview Tab', category: 'Navigation', action: () => document.querySelector('.tab-btn[data-tab="preview"]')?.click() },
+    { title: '📋 Go to Console Tab', category: 'Navigation', action: () => document.querySelector('.tab-btn[data-tab="console"]')?.click() },
+    { title: '📋 Go to Sources Tab', category: 'Navigation', action: () => document.querySelector('.tab-btn[data-tab="sources"]')?.click() },
+    { title: '📋 Go to People Tab', category: 'Navigation', action: () => document.querySelector('.tab-btn[data-tab="people"]')?.click() },
+    { title: '📋 Go to Tune Tab', category: 'Navigation', action: () => document.querySelector('.tab-btn[data-tab="tune"]')?.click() },
+    { title: '📋 Go to Calibration Tab', category: 'Navigation', action: () => document.querySelector('.tab-btn[data-tab="calibration"]')?.click() },
   ];
 
   let selectedIndex = 0;
@@ -1124,77 +1345,145 @@ document.addEventListener('DOMContentLoaded', () => {
     let w = introRippleCanvas.width = window.innerWidth;
     let h = introRippleCanvas.height = window.innerHeight;
 
+    const CELL_SIZE = 14;
+    let cols = Math.ceil(w / CELL_SIZE);
+    let rows = Math.ceil(h / CELL_SIZE);
+
+    let buffer1 = new Float32Array(cols * rows);
+    let buffer2 = new Float32Array(cols * rows);
+
     window.addEventListener('resize', () => {
       w = introRippleCanvas.width = window.innerWidth;
       h = introRippleCanvas.height = window.innerHeight;
+      cols = Math.ceil(w / CELL_SIZE);
+      rows = Math.ceil(h / CELL_SIZE);
+      buffer1 = new Float32Array(cols * rows);
+      buffer2 = new Float32Array(cols * rows);
     });
 
-    const CELL_SIZE = 8; // Pixel block size for dot-matrix pixelated look
-    const ripples = [];
+    let prevMouse = { x: w / 2, y: h / 2 };
     let isAnimating = false;
 
     window.addEventListener('mousemove', (e) => {
-      if (introSplash.style.display !== 'none' && Math.random() < 0.15) {
-        ripples.push({
-          x: e.clientX,
-          y: e.clientY,
-          radius: 4,
-          maxRadius: 160 + Math.random() * 80,
-          speed: 4,
-          alpha: 0.8
-        });
-      }
-    });
+      if (introSplash.style.display === 'none') return;
+      const mx = e.clientX;
+      const my = e.clientY;
+      const dx = mx - prevMouse.x;
+      const dy = my - prevMouse.y;
+      const speed = Math.hypot(dx, dy);
 
-    function drawPixelRipple() {
-      ctx.fillStyle = '#050505';
-      ctx.fillRect(0, 0, w, h);
-
-      // Render pixelated grid ripples
-      for (let r = ripples.length - 1; r >= 0; r--) {
-        const rip = ripples[r];
-        rip.radius += rip.speed;
-        rip.alpha *= 0.96;
-
-        if (rip.alpha < 0.02 || rip.radius > rip.maxRadius) {
-          ripples.splice(r, 1);
-          continue;
-        }
-
-        const cols = Math.ceil(w / CELL_SIZE);
-        const rows = Math.ceil(h / CELL_SIZE);
-
-        for (let x = 0; x < cols; x++) {
-          for (let y = 0; y < rows; y++) {
-            const cx = x * CELL_SIZE + CELL_SIZE / 2;
-            const cy = y * CELL_SIZE + CELL_SIZE / 2;
-            const dist = Math.hypot(cx - rip.x, cy - rip.y);
-
-            if (Math.abs(dist - rip.radius) < CELL_SIZE * 2.5) {
-              const ringAlpha = (1 - Math.abs(dist - rip.radius) / (CELL_SIZE * 2.5)) * rip.alpha;
-              ctx.fillStyle = Math.random() < 0.1 ? `rgba(255, 0, 55, ${ringAlpha * 0.9})` : `rgba(255, 255, 255, ${ringAlpha * 0.25})`;
-              ctx.fillRect(x * CELL_SIZE + 1, y * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+      if (speed > 0.5) {
+        const mc = Math.floor(mx / CELL_SIZE);
+        const mr = Math.floor(my / CELL_SIZE);
+        const radius = 2;
+        for (let r = -radius; r <= radius; r++) {
+          for (let c = -radius; c <= radius; c++) {
+            const nc = mc + c;
+            const nr = mr + r;
+            if (nc >= 1 && nc < cols - 1 && nr >= 1 && nr < rows - 1) {
+              const dist = Math.hypot(c, r);
+              if (dist <= radius) {
+                const idx = nr * cols + nc;
+                buffer1[idx] += (1 - dist / radius) * Math.min(speed * 2.2, 50);
+              }
             }
           }
         }
       }
+      prevMouse.x = mx;
+      prevMouse.y = my;
 
-      if (introSplash.style.display !== 'none') {
-        requestAnimationFrame(drawPixelRipple);
+      if (!isAnimating) {
+        isAnimating = true;
+        drawWaterFlow();
+      }
+    });
+
+    function drawWaterFlow() {
+      ctx.fillStyle = '#050505';
+      ctx.fillRect(0, 0, w, h);
+
+      let activeEnergy = 0;
+      for (let r = 1; r < rows - 1; r++) {
+        const rowIdx = r * cols;
+        for (let c = 1; c < cols - 1; c++) {
+          const i = rowIdx + c;
+          let val = (
+            buffer1[i - 1] +
+            buffer1[i + 1] +
+            buffer1[i - cols] +
+            buffer1[i + cols]
+          ) / 2 - buffer2[i];
+
+          val *= 0.90; // Faster damping for subtle liquid movement
+          buffer2[i] = val;
+          activeEnergy += Math.abs(val);
+        }
+      }
+
+      const temp = buffer1;
+      buffer1 = buffer2;
+      buffer2 = temp;
+
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const i = r * cols + c;
+          const heightVal = buffer1[i];
+
+          const cx = c * CELL_SIZE + CELL_SIZE / 2;
+          const cy = r * CELL_SIZE + CELL_SIZE / 2;
+
+          let dx = 0;
+          let dy = 0;
+          if (c > 0 && c < cols - 1 && r > 0 && r < rows - 1) {
+            dx = (buffer1[i - 1] - buffer1[i + 1]) * 0.15;
+            dy = (buffer1[i - cols] - buffer1[i + cols]) * 0.15;
+          }
+
+          const waveMag = Math.abs(heightVal);
+          const baseRadius = 1.4;
+          const dotRadius = baseRadius + Math.min(waveMag * 0.02, 1.8);
+          const alpha = 0.18 + Math.min(waveMag * 0.01, 0.45);
+
+          ctx.fillStyle = waveMag > 3.0
+            ? `rgba(255, 0, 55, ${alpha})`
+            : `rgba(255, 255, 255, ${alpha * 0.4})`;
+
+          ctx.beginPath();
+          ctx.arc(cx + dx, cy + dy, dotRadius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      if (introSplash.style.display !== 'none' || activeEnergy > 2.0) {
+        requestAnimationFrame(drawWaterFlow);
       } else {
         isAnimating = false;
       }
     }
 
     startRippleAnimation = function() {
-      ripples.push({ x: w / 2, y: h / 2, radius: 10, maxRadius: Math.max(w, h) * 0.8, speed: 6, alpha: 1 });
+      const mc = Math.floor(cols / 2);
+      const mr = Math.floor(rows / 2);
+      for (let r = -4; r <= 4; r++) {
+        for (let c = -4; c <= 4; c++) {
+          const nc = mc + c;
+          const nr = mr + r;
+          if (nc >= 1 && nc < cols - 1 && nr >= 1 && nr < rows - 1) {
+            const dist = Math.hypot(c, r);
+            if (dist <= 4) {
+              buffer1[nr * cols + nc] = (1 - dist / 4) * 260;
+            }
+          }
+        }
+      }
       if (!isAnimating) {
         isAnimating = true;
-        drawPixelRipple();
+        drawWaterFlow();
       }
     };
 
-    replayIntroSplash(); // Trigger intro splash on app start!
+    replayIntroSplash();
   })();
 
   // ==========================================================================

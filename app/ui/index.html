@@ -42,7 +42,7 @@
     <!-- Top Navigation & Brand Header -->
     <header class="app-header">
       <div class="brand-container">
-        <div class="brand-logo-wrapper" title="Click to replay boot intro">
+        <div class="brand-logo-wrapper" title="Reboot Kinara Host">
           <img src="assets/kinara-mark.png" alt="Kinara Logo" class="brand-logo-img" width="34" height="34" onerror="if(!this.dataset.fallback){this.dataset.fallback=1;this.src='kinara-mark.png';}else if(this.dataset.fallback==1){this.dataset.fallback=2;this.src='../../assets/kinara-mark.png';}" />
         </div>
         <div class="brand-text-group">
@@ -174,7 +174,7 @@
 
           <div class="command-input-row">
             <div class="cmd-prefix">CLI &gt;</div>
-            <input type="text" class="command-input" id="cmdInput" placeholder="Generated execution command..." readonly aria-label="CLI Command Output" />
+            <input type="text" class="command-input" id="cmdInput" placeholder="Type or edit CLI command..." aria-label="CLI Command Output" />
             <button class="btn btn-icon" id="btnCopyCmd" title="Copy CLI Command" aria-label="Copy Command">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             </button>
@@ -588,9 +588,9 @@
                 <div class="form-group">
                   <label class="form-label" for="tuneProfileSelect">Performance Profile (--profile)</label>
                   <select class="form-control" id="tuneProfileSelect">
-                    <option value="fastest" selected>Fastest (Cadence Skip 2 Frames)</option>
-                    <option value="balanced">Balanced (Cadence Skip 1 Frame)</option>
-                    <option value="performance">Performance (Process Every Frame)</option>
+                    <option value="fastest" selected>Fastest (Low Latency / Skip 2 Frames)</option>
+                    <option value="mid">Mid (Balanced Accuracy &amp; Speed)</option>
+                    <option value="quality">Quality (High Precision / Process Every Frame)</option>
                   </select>
                 </div>
 
@@ -602,6 +602,26 @@
                 <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; margin-top:8px;">
                   <label class="form-label" for="tuneYoloHalfChk" style="margin:0;">CUDA FP16 Half-Precision (--yolo-half)</label>
                   <input type="checkbox" id="tuneYoloHalfChk" style="width:18px; height:18px; cursor:pointer;" />
+                </div>
+
+                <div class="form-group" style="margin-top:12px;">
+                  <label class="form-label" for="tuneExecutionModeSelect">Processing Mode (--execution-mode / --pipeline-parallel)</label>
+                  <select class="form-control" id="tuneExecutionModeSelect">
+                    <option value="auto" selected>Auto (Smart Default)</option>
+                    <option value="serial">Serial (Single Worker)</option>
+                    <option value="parallel">Parallel (Multi-Worker Chunked)</option>
+                    <option value="pipeline-parallel">Pipeline Parallel (Live Stage-Split)</option>
+                  </select>
+                </div>
+
+                <div class="form-group" style="margin-top:12px;">
+                  <label class="form-label" for="tuneWorkersInput">Parallel Worker Processes (--parallel-workers)</label>
+                  <input type="number" class="form-control" id="tuneWorkersInput" min="0" max="16" value="0" placeholder="0 = Auto (60% CPU Cap)" />
+                </div>
+
+                <div class="form-group" style="margin-top:12px;">
+                  <label class="form-label" for="tuneMaxCpuInput">Max CPU Allocation % (--max-cpu-percent)</label>
+                  <input type="number" class="form-control" id="tuneMaxCpuInput" min="10" max="100" step="5" value="60" placeholder="60.0% (Default)" />
                 </div>
               </div>
             </div>

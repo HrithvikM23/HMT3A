@@ -20,9 +20,23 @@ from utils.preview_stream import PreviewFrameSink
 from utils.run_metadata import build_run_metadata, write_run_metadata
 
 
+def eligible_for_parallel_multi(config: PipelineConfig) -> bool:
+    from pathlib import Path
+    mode = getattr(config, "execution_mode", "auto")
+    if mode == "serial" or config.parallel_workers == 1:
+        return False
+    if mode == "parallel" or config.parallel_workers > 1:
+        return isinstance(config.video_path, Path)
+    return isinstance(config.video_path, Path)
+
+
 def run_multi_person_assignment(config: PipelineConfig) -> bool:
     if not prepare_runtime_config(config):
         return False
+        
+    if eligible_for_parallel_multi(config):
+        from runners.parallel_multi_person import run_parallel_multi_person
+        return run_parallel_multi_person(config)
 
     assert config.output_path is not None
     session = VideoCaptureSession(

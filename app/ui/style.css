@@ -258,6 +258,7 @@ html, body {
   letter-spacing: 0.5px;
   background: var(--gradient-brand);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
@@ -408,6 +409,11 @@ html, body {
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   padding: 12px;
   gap: 12px;
+}
+
+.video-grid.grid-workers {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  align-content: start;
 }
 
 .video-tile {
@@ -759,8 +765,10 @@ html, body {
 }
 
 .log-line {
-  margin-bottom: 2px;
-  word-break: break-all;
+  display: block;
+  margin-bottom: 3px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .log-line.system {
@@ -1658,6 +1666,29 @@ kbd {
   color: var(--cyan);
 }
 
+.cmd-palette-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.cmd-palette-footer kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 0 2px;
+}
+
 /* Nothing OS Signature Typography & Intro Splash Overlay */
 .nothing-font {
   font-family: 'Silkscreen', 'DotGothic16', monospace;
@@ -2084,6 +2115,7 @@ kbd {
   font-weight: 800;
   background: var(--gradient-brand);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   line-height: 1;
 }

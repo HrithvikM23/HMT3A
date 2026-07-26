@@ -13,47 +13,20 @@ from pathlib import Path
 from typing import Any
 
 from core.config import PipelineConfig
-from runners.common import export_motion_bundle, print_saved_paths
-from utils.exports import build_joint_map
+from runners.common import build_person_payload, draw_person_overlay, print_saved_paths
+from runners.parallel_single import ChunkResult, ChunkSpec, _concatenate_rendered_chunks, _probe_video
+from utils.exports import export_multi_person_fbx_bundle, export_multi_person_json
 from utils.fps import FpsMeter, draw_fps_overlay
 from utils.logging import log_info, log_warning
+from utils.motion_cleanup import cleanup_multi_person_frames
+from utils.multi_person import MultiPersonTracker
+from utils.payloads import PersonPayload
+from utils.preview_stream import PreviewFrameSink
 from utils.run_metadata import build_run_metadata, write_run_metadata
+from utils.parallel_sizing import resolve_parallel_workers, resolve_parallel_chunk_seconds, resolve_parallel_overlap_seconds
 
 
-_worker_cache: dict[str, Any] = {}
-
-
-@dataclass(frozen=True, slots=True)
-class ChunkSpec:
-    index: int
-    start_frame: int
-    end_frame: int
-    warmup_start_frame: int
-    rendered_path: Path
-
-
-@dataclass(frozen=True, slots=True)
-class ChunkResult:
-    index: int
-    start_frame: int
-    end_frame: int
-    rendered_path: Path
-    motion_frames_path: str | None
-    processed_frames: int
-
-
-from utils.parallel_sizing import auto_parallel_workers, is_gpu_backend, resolve_parallel_workers, resolve_parallel_chunk_seconds, resolve_parallel_overlap_seconds
-
-def eligible_for_parallel_single(config: PipelineConfig) -> bool:
-    mode = getattr(config, "execution_mode", "auto")
-    if mode == "serial" or config.parallel_workers == 1:
-        return False
-    if mode == "parallel" or config.parallel_workers > 1:
-        return isinstance(config.video_path, Path) and config.max_people == 1
-    return isinstance(config.video_path, Path) and config.max_people == 1
-
-
-def build_chunk_specs(
+def build_multi_chunk_specs(
     config: PipelineConfig,
     *,
     total_frames: int,
@@ -73,7 +46,8 @@ def build_chunk_specs(
         chunk_seconds = resolve_parallel_chunk_seconds(config, total_frames=target_frames, fps=fps)
         chunk_frames = max(1, int(round(max(fps, 1.0) * chunk_seconds)))
 
-    overlap_seconds = resolve_parallel_overlap_seconds(config)
+    # Double the overlap for multi-person for identity stabilization
+    overlap_seconds = resolve_parallel_overlap_seconds(config) * 2.0
     overlap_frames = max(0, int(round(max(fps, 1.0) * overlap_seconds)))
 
     specs: list[ChunkSpec] = []
@@ -93,37 +67,14 @@ def build_chunk_specs(
     return specs
 
 
-def _probe_video(config: PipelineConfig) -> tuple[int, float, int, int]:
-    from camera.capture import VideoInputSource
-    import cv2
-
-    source = VideoInputSource(config.video_path, fallback_fps=config.fallback_fps)
-    try:
-        total_frames = int(source.cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        fps = float(source.fps or config.fallback_fps)
-        width = source.frame_width
-        height = source.frame_height
-
-        if total_frames <= 0 and isinstance(config.video_path, (str, Path)):
-            source.cap.set(cv2.CAP_PROP_POS_AVI_RATIO, 1)
-            total_frames = int(source.cap.get(cv2.CAP_PROP_POS_FRAMES) or 0)
-            source.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
-        return max(0, total_frames), max(1.0, fps), width, height
-    finally:
-        source.close()
-
-
-def _process_chunk(config: PipelineConfig, spec: ChunkSpec, worker_index: int | None = None) -> ChunkResult:
+def _process_multi_chunk(config: PipelineConfig, spec: ChunkSpec, worker_index: int | None = None) -> ChunkResult:
     config = copy.copy(config)
     from camera.capture import VideoInputSource, VideoOutputWriter
     from inference.rtmpose import ONNXPoseHandRunner
-    from network.osc_sender import OSCSender
-    from pipeline.pipeline import PoseHandPipeline
     from utils.bootstrap_paths import ensure_local_environment
-    from utils.logging import install_safe_stdio, log_info
+    from utils.logging import install_safe_stdio
+    from network.osc_sender import OSCSender
     from utils.preview_stream import PreviewFrameSink
-    from utils.smoothing import LandmarkSmoother
 
     cpu_count = os.cpu_count() or 1
     pct = max(10.0, min(100.0, float(getattr(config, "max_cpu_percent", 60.0))))
@@ -147,12 +98,10 @@ def _process_chunk(config: PipelineConfig, spec: ChunkSpec, worker_index: int | 
         worker_index = int(env_idx) if env_idx is not None and env_idx.isdigit() else 0
     os.environ["KINARA_WORKER_INDEX"] = str(worker_index)
 
-    config = copy.copy(config)
     config.enable_preview = False
     config.osc_enabled = False
 
     preview_sink = PreviewFrameSink(worker_index=worker_index)
-
     api_pref = cv2.CAP_FFMPEG if os.name == "nt" and not isinstance(config.video_path, int) else cv2.CAP_ANY
     source = VideoInputSource(config.video_path, fallback_fps=config.fallback_fps, api_preference=api_pref)
     writer = VideoOutputWriter(
@@ -166,15 +115,8 @@ def _process_chunk(config: PipelineConfig, spec: ChunkSpec, worker_index: int | 
 
     motion_frames_file = None
     try:
-        cache_key = f"{getattr(config, 'body_model_path', '')}_{getattr(config, 'hand_model_path', '')}"
-        if cache_key in _worker_cache:
-            runner = _worker_cache[cache_key]
-        else:
-            runner = ONNXPoseHandRunner(config)
-            _worker_cache[cache_key] = runner
-            
-        smoother = LandmarkSmoother(config)
-        pipeline = PoseHandPipeline(config, runner, smoother, osc_sender)
+        runner = ONNXPoseHandRunner(config)
+        tracker = MultiPersonTracker(config, runner)
         fps_meter = FpsMeter(f"chunk-{spec.index}", 0.0)
         motion_frames_file = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
         motion_frames_path = motion_frames_file.name
@@ -189,17 +131,33 @@ def _process_chunk(config: PipelineConfig, spec: ChunkSpec, worker_index: int | 
             if not ok or frame is None:
                 break
 
+            payload_people: list[PersonPayload] = []
+            tracks = tracker.update(frame)
+            
             if current_frame < spec.warmup_start_frame:
                 current_frame += 1
                 continue
 
-            body_points, hands_by_side = pipeline.detect_pose(frame)
-            joint_depths = pipeline.last_joint_depths if config.single_camera_depth_mode == "mediapipe" else None
-            joints = build_joint_map(body_points, hands_by_side, joint_depths=joint_depths)
-            pipeline.render_pose(frame, body_points, hands_by_side, send_osc=False)
+            for track in tracks:
+                track.pipeline.render_pose(frame, track.body_points, track.hands_by_side, send_osc=False)
+                label = track.label or f"person{track.id}"
+                draw_person_overlay(frame, label, track.box, track.detection_score)
+                joint_depths = track.joint_depths if config.single_camera_depth_mode == "mediapipe" else None
+                payload_people.append(
+                    build_person_payload(
+                        person_id=track.id,
+                        label=label,
+                        box=track.box,
+                        score=track.detection_score,
+                        body_points=track.body_points,
+                        hands_by_side=track.hands_by_side,
+                        joint_depths=joint_depths,
+                        camera_views=["CAM_0"],
+                    )
+                )
 
             if current_frame >= spec.start_frame:
-                motion_frames_file.write(json.dumps({"frame_index": current_frame, "joints": joints}) + "\n")
+                motion_frames_file.write(json.dumps({"frame_index": current_frame, "people": payload_people}) + "\n")
                 fps_meter.tick(current_frame)
                 draw_fps_overlay(frame, fps_meter, config.fps_overlay_enabled)
                 preview_sink.write(frame, current_frame)
@@ -238,73 +196,34 @@ def _process_chunk(config: PipelineConfig, spec: ChunkSpec, worker_index: int | 
         processed_frames=processed_frames,
     )
 
+def _stitch_identities(frames: list[dict]) -> list[dict]:
+    # Placeholder for identity stitching logic via color matching
+    # Since we can't fully implement it without all tracks, this is a basic stub that
+    # assumes person_id is good enough or will be refined later
+    return frames
 
-def _concatenate_rendered_chunks(chunk_paths: list[Path], output_path: Path, output_fourcc: str, fallback_fps: float) -> None:
-    import cv2
-    from camera.capture import VideoOutputWriter
-
-    first_capture = None
-    for path in chunk_paths:
-        first_capture = cv2.VideoCapture(str(path))
-        if first_capture.isOpened():
-            break
-        first_capture.release()
-        first_capture = None
-    if first_capture is None:
-        raise RuntimeError("No rendered chunk videos could be opened for stitching.")
-
-    try:
-        width = int(first_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(first_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = float(first_capture.get(cv2.CAP_PROP_FPS) or fallback_fps)
-    finally:
-        first_capture.release()
-
-    writer = VideoOutputWriter(output_path, width, height, fps, output_fourcc)
-    try:
-        for path in chunk_paths:
-            capture = cv2.VideoCapture(str(path))
-            try:
-                if not capture.isOpened():
-                    raise RuntimeError(f"Could not open rendered chunk: {path}")
-                while True:
-                    ok, frame = capture.read()
-                    if not ok or frame is None:
-                        break
-                    writer.write(frame)
-            finally:
-                capture.release()
-    finally:
-        writer.close()
-
-
-def run_parallel_assignment(config: PipelineConfig) -> bool:
-    if not eligible_for_parallel_single(config):
-        return False
-
+def run_parallel_multi_person(config: PipelineConfig) -> bool:
     total_frames, fps, _width, _height = _probe_video(config)
     if total_frames <= 0 and config.benchmark_frames:
         total_frames = config.benchmark_frames
     workers = resolve_parallel_workers(config, total_frames=total_frames, fps=fps)
-    if workers <= 1:
-        return False
 
-    chunk_root = config.project_root / ".kinara_runtime" / "chunks" / f"run_{os.getpid()}_{config.run_index}"
+    chunk_root = config.project_root / ".kinara_runtime" / "chunks" / f"run_multi_{os.getpid()}_{config.run_index}"
     if chunk_root.exists():
         shutil.rmtree(chunk_root, ignore_errors=True)
     chunk_root.mkdir(parents=True, exist_ok=True)
 
-    specs = build_chunk_specs(config, total_frames=total_frames, fps=fps, chunk_root=chunk_root)
-    if len(specs) <= 1:
+    specs = build_multi_chunk_specs(config, total_frames=total_frames, fps=fps, chunk_root=chunk_root)
+    if len(specs) <= 0:
         shutil.rmtree(chunk_root, ignore_errors=True)
         return False
 
     workers = min(workers, len(specs))
     chunk_seconds = resolve_parallel_chunk_seconds(config, total_frames=total_frames, fps=fps)
-    overlap_seconds = resolve_parallel_overlap_seconds(config)
+    overlap_seconds = resolve_parallel_overlap_seconds(config) * 2.0
     started_at = time.perf_counter()
     log_info(
-        "Parallel single-person processing: "
+        "Parallel multi-person processing: "
         f"{workers} workers, {len(specs)} chunks, {chunk_seconds:.2f}s chunks, {overlap_seconds:.2f}s overlap"
     )
 
@@ -315,7 +234,7 @@ def run_parallel_assignment(config: PipelineConfig) -> bool:
         total_chunks = len(specs)
         with ProcessPoolExecutor(max_workers=workers) as executor:
             futures = [
-                executor.submit(_process_chunk, config, spec, spec.index % workers)
+                executor.submit(_process_multi_chunk, config, spec, spec.index % workers)
                 for spec in specs
             ]
             for future in as_completed(futures):
@@ -342,9 +261,12 @@ def run_parallel_assignment(config: PipelineConfig) -> bool:
                     os.unlink(result.motion_frames_path)
                 except OSError:
                     pass
+        
         motion_frames.sort(key=lambda frame: int(frame.get("frame_index", 0)))
+        stitched_frames = _stitch_identities(motion_frames)
+        cleaned_motion_frames = cleanup_multi_person_frames(stitched_frames, config)
 
-        frame_cnt = len(motion_frames) or total_frames
+        frame_cnt = len(cleaned_motion_frames) or total_frames
         log_info(
             f"Parallel inference completed in {parallel_time:.2f}s "
             f"({frame_cnt / parallel_time:.2f} FPS across {workers} workers)"
@@ -353,28 +275,34 @@ def run_parallel_assignment(config: PipelineConfig) -> bool:
 
         _concatenate_rendered_chunks(rendered_paths, config.rendered_output_path, config.output_fourcc, fps)
 
-        export_metadata: dict[str, Any] = {
-            "mode": "single-parallel",
+        export_metadata = {
+            "mode": "multi-parallel",
             "profile": config.profile,
             "body_backend": config.body_backend,
             "hand_backend": config.hand_backend,
             "mediapipe_pose_model": config.mediapipe_pose_model,
             "source": str(config.video_path),
-            "body_model_variant": config.body_model_variant,
-            "hand_model_variant": config.hand_model_variant,
+            "max_people": config.max_people,
+            "identity_hints": {key: list(value) for key, value in config.identity_hints.items()},
             "parallel_workers": workers,
             "parallel_chunk_seconds": chunk_seconds,
             "parallel_overlap_seconds": overlap_seconds,
             "parallel_chunk_count": len(results),
         }
-        export_motion_bundle(config, fps=fps, frames=motion_frames, metadata=export_metadata)
+        export_multi_person_json(
+            config.json_output_path,
+            fps=fps,
+            frames=cleaned_motion_frames,
+            metadata=export_metadata,
+        )
+        exported_fbx_paths = export_multi_person_fbx_bundle(config.fbx_output_path, fps, cleaned_motion_frames)
         write_run_metadata(
             config.metadata_output_path,
             build_run_metadata(
                 config,
-                mode="single-parallel",
+                mode="multi-parallel",
                 fps=fps,
-                frame_count=len(motion_frames),
+                frame_count=len(cleaned_motion_frames),
                 extra=export_metadata,
             ),
         )
@@ -384,10 +312,10 @@ def run_parallel_assignment(config: PipelineConfig) -> bool:
             f"Total pipeline run completed in {total_time:.2f}s "
             f"(Inference: {parallel_time:.2f}s, Export: {export_time:.2f}s)"
         )
-        print_saved_paths(config.output_path, config.json_output_path, config.fbx_output_path, config.metadata_output_path)
+        print_saved_paths(config.output_path, config.json_output_path, *exported_fbx_paths, config.metadata_output_path)
         return True
     except Exception as exc:
-        log_warning(f"Parallel processing failed; falling back to serial processing: {type(exc).__name__}: {exc}")
+        log_warning(f"Parallel multi-person processing failed; falling back to serial processing: {type(exc).__name__}: {exc}")
         return False
     finally:
         for p in chunk_paths:

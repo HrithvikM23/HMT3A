@@ -26,6 +26,9 @@ def run_assignment(config: PipelineConfig) -> bool:
         return run_multi_person_assignment(config)
     if not prepare_runtime_config(config):
         return False
+    if config.pipeline_parallel:
+        from runners.pipeline_parallel import run_pipeline_parallel
+        return run_pipeline_parallel(config)
     if run_parallel_assignment(config):
         return True
 

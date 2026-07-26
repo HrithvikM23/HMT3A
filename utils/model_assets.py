@@ -74,13 +74,25 @@ MEDIAPIPE_HAND_ASSETS = (
 
 
 def _download_to_path(source_url: str, destination: Path) -> None:
+    from urllib.request import Request
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp_path = destination.with_suffix(f"{destination.suffix}.{os.getpid()}.{uuid.uuid4().hex}.part")
 
+    req = Request(
+        source_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Encoding": "identity",
+            "Connection": "keep-alive",
+        },
+    )
+
     try:
-        with urlopen(source_url, timeout=30) as response, temp_path.open("wb") as output_file:
+        with urlopen(req, timeout=30) as response, temp_path.open("wb") as output_file:
             while True:
-                chunk = response.read(1024 * 1024)
+                chunk = response.read(8 * 1024 * 1024)
                 if not chunk:
                     break
                 output_file.write(chunk)

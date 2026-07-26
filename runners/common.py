@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import cv2
 
@@ -17,8 +18,8 @@ from utils.skeleton import Point
 def export_motion_bundle(
     config: PipelineConfig,
     fps: float,
-    frames: list[dict[str, object]],
-    metadata: dict[str, object],
+    frames: list[dict[str, Any]],
+    metadata: dict[str, Any],
 ) -> None:
     if not frames:
         return

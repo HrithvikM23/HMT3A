@@ -74,8 +74,9 @@ def test_web_api_safe_evaluate_js_handles_disposed_object():
     api.set_window(dummy_win)
     assert api._window is dummy_win
 
-    # Calling log should attempt evaluate_js, catch exception, and set _window to None
-    api.log("test log")
+    # safe_evaluate_js now enqueues; _execute_js is where the disposed window
+    # exception is caught and _window is set to None.
+    api._execute_js("window.onKinaraLog('test');")
     assert api._window is None
 
 

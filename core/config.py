@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 class LiveUdpDefaults:
@@ -73,7 +74,7 @@ class PipelineConfig:
     single_camera_depth_mode: str = "flat"
     auto_performance_enabled: bool = True
     yolo_tracker: str = "bytetrack.yaml"
-    yolo_device: str | None = None
+    yolo_device: str | int | None = None
     yolo_half: bool = False
     yolo_fuse: bool = True
     yolo_warmup: bool = True
@@ -101,8 +102,10 @@ class PipelineConfig:
     fps_overlay_enabled: bool = True
     benchmark_frames: int = 0
     execution_mode: str = "auto"
+    pipeline_parallel: bool = False
     parallel_workers: int = 0
-    parallel_chunk_seconds: float = 5.0
+    max_cpu_percent: float = 60.0
+    parallel_chunk_seconds: float = 0.0
     parallel_overlap_seconds: float = 0.5
     enable_preview: bool = True
     provider_names: tuple[str, ...] = ("CUDAExecutionProvider",)

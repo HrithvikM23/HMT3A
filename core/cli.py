@@ -219,6 +219,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Single-person processing mode: auto (smart parallel detection), serial (force single-core), parallel (force multi-process).",
     )
     parser.add_argument(
+        "--pipeline-parallel",
+        action="store_true",
+        help="Enables live pipeline-parallel mode.",
+    )
+    parser.add_argument(
         "--parallel-workers",
         type=int,
         default=0,
@@ -228,9 +233,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--max-cpu-percent",
+        type=float,
+        default=60.0,
+        help="Maximum percentage of logical CPU cores to use for thread pools (10.0 to 100.0). Default is 60.0%%.",
+    )
+    parser.add_argument(
         "--parallel-chunk-seconds",
         type=float,
-        default=5.0,
+        default=0.0,
         help="Seconds per offline processing chunk. 0 chooses automatically.",
     )
     parser.add_argument(

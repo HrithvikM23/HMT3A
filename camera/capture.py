@@ -6,9 +6,12 @@ import cv2
 
 
 class VideoInputSource:
-    def __init__(self, video_path: int | Path, fallback_fps: float = 30.0):
+    def __init__(self, video_path: int | Path, fallback_fps: float = 30.0, api_preference: int = cv2.CAP_ANY):
         source = video_path if isinstance(video_path, int) else str(video_path)
-        self.cap = cv2.VideoCapture(source)
+        if api_preference != cv2.CAP_ANY:
+            self.cap = cv2.VideoCapture(source, api_preference)
+        else:
+            self.cap = cv2.VideoCapture(source)
         if not self.cap.isOpened():
             if isinstance(video_path, int):
                 raise RuntimeError(

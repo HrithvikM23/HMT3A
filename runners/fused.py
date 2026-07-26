@@ -93,7 +93,9 @@ def run_fused_assignments(
     frame_index = 0
     export_fps = config.fallback_fps
     fps_meter = FpsMeter("fused", config.fps_log_interval)
-    preview_sink = PreviewFrameSink()
+    preview_sinks: dict[str, PreviewFrameSink] = {}
+    for cam_index, assignment in enumerate(assignments):
+        preview_sinks[assignment.label] = PreviewFrameSink(worker_index=cam_index)
     started_at = time.perf_counter()
     try:
         min_offset = min((config.sync_offsets.get(assignment.label.upper(), 0) for assignment in assignments), default=0)
@@ -162,6 +164,7 @@ def run_fused_assignments(
                     motion_frames,
                     triangulation_frames,
                     frame_index,
+                    preview_sinks,
                 )
             else:
                 _run_fused_single_frame(
@@ -177,12 +180,15 @@ def run_fused_assignments(
                     motion_frames,
                     triangulation_frames,
                     frame_index,
+                    preview_sinks,
                 )
 
             frame_index += 1
             fps_meter.tick(frame_index - 1)
             draw_fps_overlay(canvas, fps_meter, config.fps_overlay_enabled)
-            preview_sink.write(canvas, frame_index - 1)
+            # Write fused canvas to reference camera's preview sink
+            if reference_label in preview_sinks:
+                preview_sinks[reference_label].write(canvas, frame_index - 1)
             writer.write(canvas)
 
             if config.enable_preview:
@@ -195,7 +201,13 @@ def run_fused_assignments(
         if writer is not None:
             writer.close()
         osc_sender.close()
-        cv2.destroyAllWindows()
+        for sink in preview_sinks.values():
+            if hasattr(sink, 'close'):
+                sink.close()
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
 
     if config.max_people > 1:
         metadata = _build_fused_metadata("fused_multi_person", assignments, config)
@@ -399,11 +411,25 @@ def _run_fused_multi_person_frame(
     motion_frames: list[dict[str, object]],
     triangulation_frames: list[dict[str, object]],
     frame_index: int,
+    preview_sinks: dict[str, PreviewFrameSink] | None = None,
 ) -> None:
     camera_tracks = {
         label: trackers[label].update(frame)
         for label, frame in frames_by_label.items()
     }
+
+    # Write per-camera preview frames with per-camera track overlays
+    if preview_sinks:
+        for label, tracks in camera_tracks.items():
+            if label == reference_label or label not in preview_sinks:
+                continue
+            cam_frame = frames_by_label[label].copy()
+            for track in tracks:
+                track.pipeline.render_pose(cam_frame, track.body_points, track.hands_by_side, send_osc=False)
+                track_label = track.label or f"person{track.id}"
+                draw_person_overlay(cam_frame, track_label, track.box, track.detection_score)
+            preview_sinks[label].write(cam_frame, frame_index)
+
     grouped_people = align_people_across_cameras(camera_tracks, reference_label)
     payload_people: list[PersonPayload] = []
 
@@ -513,6 +539,7 @@ def _run_fused_single_frame(
     motion_frames: list[dict[str, object]],
     triangulation_frames: list[dict[str, object]],
     frame_index: int,
+    preview_sinks: dict[str, PreviewFrameSink] | None = None,
 ) -> None:
     camera_bodies: dict[str, list[tuple[int, int, float]]] = {}
     camera_hands: dict[str, dict[str, HandPayload]] = {}
@@ -520,6 +547,12 @@ def _run_fused_single_frame(
         body_points, hands_by_side = pipelines[label].detect_pose(frame)
         camera_bodies[label] = body_points
         camera_hands[label] = hands_by_side
+
+        # Write per-camera preview frames with per-camera detection overlays
+        if preview_sinks and label != reference_label and label in preview_sinks:
+            cam_frame = frame.copy()
+            pipelines[label].render_pose(cam_frame, body_points, hands_by_side, send_osc=False)
+            preview_sinks[label].write(cam_frame, frame_index)
 
     renderer = renderers.setdefault(
         "single",

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import math
 import os
 import subprocess
+import queue
 import sys
 import threading
 import time
@@ -103,7 +105,12 @@ class KinaraWebAPI:
         self._preview_thread: threading.Thread | None = None
         self._preview_running: bool = False
         self._preview_error_logged: bool = False
+        self._user_stopped: bool = False
         self._lock = threading.Lock()
+        
+        self._js_queue = queue.Queue(maxsize=200)
+        self._preview_queue = queue.Queue(maxsize=5)
+        self._js_thread: threading.Thread | None = None
 
     def set_window(self, window: Any) -> None:
         self._window = window
@@ -122,10 +129,79 @@ class KinaraWebAPI:
     def safe_evaluate_js(self, script: str) -> None:
         if self._window is None:
             return
+            
+        if script.startswith("window.onKinaraPreviewFrame"):
+            try:
+                self._preview_queue.put_nowait(script)
+            except queue.Full:
+                try:
+                    self._preview_queue.get_nowait()
+                    self._preview_queue.put_nowait(script)
+                except (queue.Empty, queue.Full):
+                    pass
+        else:
+            try:
+                self._js_queue.put_nowait(script)
+            except queue.Full:
+                try:
+                    self._js_queue.get_nowait()
+                    self._js_queue.put_nowait(script)
+                except (queue.Empty, queue.Full):
+                    pass
+
+    def _execute_js(self, script: str) -> None:
+        if self._window is None:
+            return
         try:
             self._window.evaluate_js(script)
         except (Exception, BaseException):
             self._window = None
+        except:
+            self._window = None
+
+    def _js_consumer(self) -> None:
+        log_batch = []
+        last_log_push = time.time()
+        
+        def flush_logs():
+            if log_batch:
+                import json
+                joined = "\n".join(log_batch)
+                self._execute_js(f"window.onKinaraLog({json.dumps(joined)});")
+                log_batch.clear()
+
+        while True:
+            with self._lock:
+                running = self._preview_running
+                
+            try:
+                script = self._preview_queue.get_nowait()
+                self._execute_js(script)
+                continue
+            except queue.Empty:
+                pass
+                
+            try:
+                script = self._js_queue.get(timeout=0.05)
+                if script.startswith("window.onKinaraLog"):
+                    try:
+                        import json
+                        log_text = json.loads(script[19:-2])
+                        log_batch.append(log_text)
+                    except:
+                        self._execute_js(script)
+                else:
+                    flush_logs()
+                    self._execute_js(script)
+            except queue.Empty:
+                if not running and self._js_queue.empty() and self._preview_queue.empty():
+                    break
+                    
+            if log_batch and time.time() - last_log_push >= 0.1:
+                flush_logs()
+                last_log_push = time.time()
+                
+        flush_logs()
 
     def log(self, text: str) -> None:
         import json
@@ -136,6 +212,58 @@ class KinaraWebAPI:
         self.safe_evaluate_js(f"window.onKinaraStatus({json.dumps(status)}, {json.dumps(status_type)});")
 
     def get_initial_command(self) -> str:
+        return self._build_command_string()
+
+    def _file_dialog_open(self) -> Any:
+        if hasattr(webview, "FileDialog") and hasattr(webview.FileDialog, "OPEN"):
+            return webview.FileDialog.OPEN
+        return getattr(webview, "OPEN_DIALOG", 10)
+
+    def _file_dialog_folder(self) -> Any:
+        if hasattr(webview, "FileDialog") and hasattr(webview.FileDialog, "FOLDER"):
+            return webview.FileDialog.FOLDER
+        return getattr(webview, "FOLDER_DIALOG", 20)
+
+    def browse_files(self) -> list[str]:
+        if self._window is None:
+            return []
+        try:
+            result = self._window.create_file_dialog(
+                self._file_dialog_open(),
+                allow_multiple=True,
+                file_types=("Video files (*.mp4;*.avi;*.mov;*.mkv)", "All files (*.*)"),
+            )
+            return list(result) if result else []
+        except (Exception, BaseException):
+            self._window = None
+            return []
+
+    def browse_destination(self) -> str:
+        if self._window is None:
+            return ""
+        try:
+            result = self._window.create_file_dialog(self._file_dialog_folder())
+            return result[0] if result else ""
+        except (Exception, BaseException):
+            self._window = None
+            return ""
+
+    def browse_triangulation(self) -> str:
+        if self._window is None:
+            return ""
+        try:
+            result = self._window.create_file_dialog(
+                self._file_dialog_open(),
+                file_types=("Calibration files (*.toml;*.json)", "All files (*.*)"),
+            )
+            return result[0] if result else ""
+        except (Exception, BaseException):
+            self._window = None
+            return ""
+
+    def add_camera(self, camera_index_or_path: str) -> str:
+        if camera_index_or_path and camera_index_or_path not in self.sources:
+            self.sources.append(camera_index_or_path)
         return self._build_command_string()
 
     def set_sources(self, sources: list[str]) -> str:
@@ -224,77 +352,92 @@ class KinaraWebAPI:
         self.triangulation_path = ""
         return self._build_command_string()
 
-    def set_parallel_workers(self, count: int) -> str:
-        self.advanced_values["parallel_workers"] = str(count)
+    def set_advanced_option(self, key: str, value: Any) -> str:
+        """Set a single advanced CLI option by key."""
+        if value == '' or value is None:
+            self.advanced_values.pop(key, None)
+        else:
+            self.advanced_values[key] = value
         return self._build_command_string()
 
-    def get_benchmark_telemetry(self, workers: int = 4, sample_seconds: float = 60.0) -> dict[str, Any]:
-        workers_count = max(1, int(workers))
-        sample_sec = max(1.0, float(sample_seconds))
-        # Estimated baseline FPS — not measured from actual hardware profiling
-        serial_fps = 42.5
-        parallel_fps = serial_fps * (1.0 + (workers_count - 1) * 0.82)
-        total_frames = sample_sec * 30.0
-        serial_time = total_frames / serial_fps
-        parallel_time = total_frames / parallel_fps
-        speedup = serial_time / max(0.001, parallel_time)
+    def set_profile(self, profile: str) -> str:
+        """Set the performance profile."""
+        self.advanced_values['profile'] = profile
+        return self._build_command_string()
+
+    def set_workflow_option(self, key: str, value: Any) -> str:
+        """Set a workflow-level option (triangulation, calibration, etc.)."""
+        if key == 'enable_triangulation':
+            self.enable_triangulation = bool(value)
+        elif key == 'calibrate_mode':
+            self.calibrate_mode = bool(value)
+        else:
+            self.advanced_values[key] = value
+        return self._build_command_string()
+
+    def apply_preset_weight(self, weight: str) -> str:
+        """Apply a hand model weight preset."""
+        values = MODEL_WEIGHT_VALUES.get(weight)
+        if values:
+            self.advanced_values.update(values)
+        return self._build_command_string()
+
+    def set_execution_mode(self, mode: str) -> str:
+        """Set the execution mode (auto/serial/parallel) and pipeline-parallel flag."""
+        if mode == 'pipeline-parallel':
+            self.advanced_values['pipeline_parallel'] = True
+            self.advanced_values.pop('execution_mode', None)
+        else:
+            self.advanced_values.pop('pipeline_parallel', None)
+            if mode == 'auto' or mode == '':
+                self.advanced_values.pop('execution_mode', None)
+            else:
+                self.advanced_values['execution_mode'] = mode
+        return self._build_command_string()
+
+    def set_parallel_workers(self, count: int) -> str:
+        """Set parallel worker count (0 = auto 60% CPU cap)."""
+        val = int(count)
+        if val <= 0:
+            self.advanced_values.pop("parallel_workers", None)
+        else:
+            cpu_cap = os.cpu_count() or 1
+            self.advanced_values["parallel_workers"] = str(min(val, cpu_cap))
+        return self._build_command_string()
+
+    def set_max_cpu_percent(self, pct: float) -> str:
+        """Set max CPU percent allocation (10.0 to 100.0)."""
+        val = max(10.0, min(100.0, float(pct)))
+        if val == 60.0:
+            self.advanced_values.pop("max_cpu_percent", None)
+        else:
+            self.advanced_values["max_cpu_percent"] = f"{val:.1f}"
+        return self._build_command_string()
+
+    def get_system_info(self) -> dict[str, Any]:
+        """Return system hardware specs for dynamic UI constraints."""
+        cpu_count = os.cpu_count() or 1
         return {
-            "workers": workers_count,
-            "sample_seconds": sample_sec,
-            "total_frames": int(total_frames),
-            "serial_time_sec": round(serial_time, 2),
-            "parallel_time_sec": round(parallel_time, 2),
-            "time_saved_sec": round(serial_time - parallel_time, 2),
-            "serial_fps": round(serial_fps, 1),
-            "parallel_fps": round(parallel_fps, 1),
-            "speedup_metric": f"{speedup:.2f}x",
-            "speedup_factor": round(speedup, 2),
+            "cpu_count": cpu_count,
+            "cpu_60_cap": max(1, math.floor(cpu_count * 0.60)),
         }
 
-    def browse_files(self) -> list[str]:
-        if self._window is None:
-            return []
-        try:
-            result = self._window.create_file_dialog(
-                cast(int, webview.OPEN_DIALOG),
-                allow_multiple=True,
-                file_types=("Video files (*.mp4;*.avi;*.mov;*.mkv)", "All files (*.*)"),
-            )
-            return list(result) if result else []
-        except (Exception, BaseException):
-            self._window = None
-            return []
-
-    def browse_destination(self) -> str:
-        if self._window is None:
-            return ""
-        try:
-            result = self._window.create_file_dialog(cast(int, webview.FOLDER_DIALOG))
-            return result[0] if result else ""
-        except (Exception, BaseException):
-            self._window = None
-            return ""
-
-    def browse_triangulation(self) -> str:
-        if self._window is None:
-            return ""
-        try:
-            result = self._window.create_file_dialog(
-                cast(int, webview.OPEN_DIALOG),
-                file_types=("Calibration files (*.toml;*.json)", "All files (*.*)"),
-            )
-            return result[0] if result else ""
-        except (Exception, BaseException):
-            self._window = None
-            return ""
-
-    def start_run(self) -> dict[str, Any]:
+    def start_run(self, custom_command: str | None = None) -> dict[str, Any]:
         if self._process is not None and self._process.poll() is None:
             return {"log": "Kinara is already running."}
-        if not self.sources:
+        if not self.sources and not (custom_command and "--source" in custom_command):
             return {"log": "Please select at least one input source."}
 
-        command = self._build_command_list()
+        if custom_command and custom_command.strip():
+            import shlex
+            command = shlex.split(custom_command)
+            if "parallel_workers" in self.advanced_values and "--parallel-workers" not in command:
+                command.extend(["--parallel-workers", str(self.advanced_values["parallel_workers"])])
+            if "max_cpu_percent" in self.advanced_values and "--max-cpu-percent" not in command:
+                command.extend(["--max-cpu-percent", str(self.advanced_values["max_cpu_percent"])])
+        else:
+            command = self._build_command_list()
+
         self._start_process(command, status_text="Running", enable_preview=True)
         return {"log": f"Started run: {' '.join(quote(p) for p in command)}"}
 
@@ -313,22 +456,49 @@ class KinaraWebAPI:
         return {"log": "Checking Kinara runtime dependencies..."}
 
     def stop_run(self) -> None:
+        self._user_stopped = True
+        with self._lock:
+            self._preview_running = False
         if self._process is not None and self._process.poll() is None:
             self.set_status("Stopping...", "idle")
-            try:
-                self._process.terminate()
-            except (ProcessLookupError, OSError):
-                pass
+            self._terminate_process_tree(force=True)
+            self.log("[Launcher] Stopped execution and worker processes.")
+        self.safe_evaluate_js("window.resetPreviewStage();")
 
     def kill_run(self) -> None:
+        self._user_stopped = True
+        with self._lock:
+            self._preview_running = False
         if self._process is not None and self._process.poll() is None:
             self.set_status("Killed", "error")
-            try:
-                self._process.kill()
-            except (ProcessLookupError, OSError):
-                pass
+            self._terminate_process_tree(force=True)
+            self.log("[Launcher] Terminated process tree.")
+        self.safe_evaluate_js("window.resetPreviewStage();")
+
+    def _terminate_process_tree(self, force: bool = False) -> None:
+        if self._process is None:
+            return
+        pid = self._process.pid
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                if force:
+                    self._process.kill()
+                else:
+                    self._process.terminate()
+        except Exception:
+            pass
+        finally:
+            self._process = None
 
     def _start_process(self, command: list[str], status_text: str, enable_preview: bool) -> None:
+        self._user_stopped = False
         log_path = default_run_log_path("kinara_run", root=PROJECT_ROOT / ".kinara_logs")
         self.log(f"> {' '.join(quote(part) for part in command)}")
         self.log(f"Log file: {log_path}")
@@ -362,10 +532,15 @@ class KinaraWebAPI:
                 bufsize=1,
                 env=env,
             )
+            with self._lock:
+                self._preview_running = True
+                
+            if self._js_thread is None or not self._js_thread.is_alive():
+                self._js_thread = threading.Thread(target=self._js_consumer, daemon=True)
+                self._js_thread.start()
+                
             threading.Thread(target=self._stream_stdout, daemon=True).start()
             if enable_preview:
-                with self._lock:
-                    self._preview_running = True
                 self._preview_thread = threading.Thread(target=self._watch_preview_frames, args=(preview_frame_path,), daemon=True)
                 self._preview_thread.start()
         except Exception as err:
@@ -382,20 +557,32 @@ class KinaraWebAPI:
         rc = self._process.wait()
         with self._lock:
             self._preview_running = False
-        self.set_status("Finished" if rc == 0 else f"Exited {rc}", "idle" if rc == 0 else "error")
+            user_stopped = self._user_stopped
+        if not user_stopped:
+            self.set_status("Finished" if rc == 0 else f"Exited {rc}", "idle" if rc == 0 else "error")
 
     def _watch_preview_frames(self, frame_path: Path) -> None:
         self._last_preview_file: Path | None = None
+        _PREVIEW_MIN_INTERVAL = 0.1
+        last_frame_time = 0.0
+        
         with self._lock:
             running = self._preview_running
         while running:
             time.sleep(0.04)
+            current_time = time.time()
+            if current_time - last_frame_time < _PREVIEW_MIN_INTERVAL:
+                with self._lock:
+                    running = self._preview_running
+                continue
+                
             try:
-                frame_paths = sorted(frame_path.parent.glob(f"{frame_path.stem}*{frame_path.suffix}"))
-                if not frame_paths:
+                all_files = [p for p in frame_path.parent.glob(f"{frame_path.stem}*{frame_path.suffix}") if p.exists()]
+                if not all_files:
                     latest = frame_path if frame_path.exists() else None
                 else:
-                    latest = frame_paths[-1]
+                    all_files.sort(key=lambda p: (p.stat().st_mtime, p.name))
+                    latest = all_files[-1]
 
                 if latest is not None and latest != self._last_preview_file:
                     data = None
@@ -410,20 +597,28 @@ class KinaraWebAPI:
                     if data:
                         b64 = base64.b64encode(data).decode("utf-8")
                         self._last_preview_file = latest
+                        last_frame_time = time.time()
 
-                        # Determine camera ID from filename
+                        # Determine camera ID and worker ID from filename
                         cam_id = "CAM_0"
+                        worker_id = "WORKER_0"
                         fname_upper = latest.name.upper()
-                        if "CAM_" in fname_upper:
-                            parts = fname_upper.split("CAM_")
-                            if len(parts) > 1 and parts[1][0].isdigit():
-                                cam_id = f"CAM_{parts[1][0]}"
-                        elif "WORKER_" in fname_upper:
+                        if "WORKER_" in fname_upper:
                             parts = fname_upper.split("WORKER_")
                             if len(parts) > 1 and parts[1][0].isdigit():
-                                cam_id = f"CAM_{parts[1][0]}"
+                                worker_id = f"WORKER_{parts[1][0]}"
 
-                        self.safe_evaluate_js(f"window.onKinaraPreviewFrame('{b64}', '{cam_id}');")
+                        if len(self.sources) > 1:
+                            if "CAM_" in fname_upper:
+                                parts = fname_upper.split("CAM_")
+                                if len(parts) > 1 and parts[1][0].isdigit():
+                                    cam_id = f"CAM_{parts[1][0]}"
+                            elif "WORKER_" in fname_upper:
+                                parts = fname_upper.split("WORKER_")
+                                if len(parts) > 1 and parts[1][0].isdigit():
+                                    cam_id = f"CAM_{parts[1][0]}"
+
+                        self.safe_evaluate_js(f"window.onKinaraPreviewFrame('{b64}', '{cam_id}', '{worker_id}');")
             except Exception:
                 pass
 

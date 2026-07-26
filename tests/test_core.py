@@ -7,11 +7,17 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from contextlib import redirect_stdout
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from types import SimpleNamespace
-from typing import cast
-from unittest.mock import patch
+from typing import Any, cast
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
@@ -187,7 +193,7 @@ class CoreLogicTests(unittest.TestCase):
             report = build_runtime_report(config)
 
         report_text = json.dumps(report)
-        self.assertEqual(report["outputs"]["metadata"].split("/")[0], "<PROJECT_ROOT>")
+        self.assertEqual(cast(dict[str, Any], report)["outputs"]["metadata"].split("/")[0], "<PROJECT_ROOT>")
         self.assertIn("<PROJECT_ROOT>", report_text)
         self.assertNotIn(str(project_root), report_text)
 
@@ -282,7 +288,7 @@ class CoreLogicTests(unittest.TestCase):
     def test_calibration_empty_corner_rows_raise_actionable_error(self) -> None:
         from utils.calibration import _validate_detected_rows
 
-        rows = [[{"corners": np.float64([]), "ids": np.float64([])}], []]
+        rows = [[{"corners": np.array([], dtype=np.float64), "ids": np.array([], dtype=np.float64)}], []]
 
         with self.assertRaisesRegex(ValueError, "no Charuco boards were detected"):
             _validate_detected_rows(rows, ["CAM_0", "CAM_1"], marker_bits=4, dict_size=250)
@@ -317,7 +323,7 @@ class CoreLogicTests(unittest.TestCase):
                 return [np.array([[[6.0, 8.0]]], dtype=np.float32)], np.array([[1]], dtype=np.int32)
 
             def detect_image(self, image, camera=None):
-                return np.float64([]), np.float64([])
+                return np.array([], dtype=np.float64), np.array([], dtype=np.float64)
 
         board = FakeBoard()
 
@@ -325,7 +331,7 @@ class CoreLogicTests(unittest.TestCase):
         corners, ids = board.detect_markers(np.zeros((10, 12), dtype=np.uint8))
 
         self.assertEqual([shape[:2] for shape in board.detected_shapes], [(10, 12), (20, 24)])
-        self.assertEqual(ids.tolist(), [[1]])
+        self.assertEqual(cast(Any, ids).tolist(), [[1]])
         self.assertEqual(corners[0].tolist(), [[[3.0, 4.0]]])
 
     def test_low_resolution_charuco_detection_uses_retry_overrides(self) -> None:
@@ -336,7 +342,7 @@ class CoreLogicTests(unittest.TestCase):
                 return [], []
 
             def detect_image(self, image, camera=None):
-                return np.float64([]), np.float64([])
+                return np.array([], dtype=np.float64), np.array([], dtype=np.float64)
 
         settings = _enable_low_resolution_charuco_detection(
             FakeBoard(),
@@ -371,7 +377,7 @@ class CoreLogicTests(unittest.TestCase):
                 return [np.array([[[10.0, 14.0]]], dtype=np.float32)], np.array([[2]], dtype=np.int32)
 
             def detect_image(self, image, camera=None):
-                return np.float64([]), np.float64([])
+                return np.array([], dtype=np.float64), np.array([], dtype=np.float64)
 
         board = FakeBoard()
         scaled_corners = np.array([[[20.0, 24.0]]], dtype=np.float32)
@@ -997,7 +1003,7 @@ class CoreLogicTests(unittest.TestCase):
             detect_hands=lambda frame, points: {},
             last_joint_depths={},
         )
-        track = PersonTrack(id=1, box=(0, 0, 10, 10), pipeline=pipeline)
+        track = PersonTrack(id=1, box=(0, 0, 10, 10), pipeline=cast(Any, pipeline))
 
         body_points = _smooth_and_constrain_body(track, raw_points)
 
@@ -1357,7 +1363,7 @@ class CoreLogicTests(unittest.TestCase):
         self.assertEqual(_get_calibration_entry("CAM_0", calibs).get("weight"), 2.0)
 
     def test_pipeline_config_color_coercion(self) -> None:
-        cfg = PipelineConfig(video_path=Path("dummy.mp4"), body_line_color="255,0,0", body_point_color=[0, 255, 0])
+        cfg = PipelineConfig(video_path=Path("dummy.mp4"), body_line_color=cast(Any, "255,0,0"), body_point_color=cast(Any, [0, 255, 0]))
         self.assertEqual(cfg.body_line_color, (255, 0, 0))
         self.assertEqual(cfg.body_point_color, (0, 255, 0))
 
