@@ -31,9 +31,15 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Recognition",
 ]
 dependencies = [
+    "aniposelib>=0.7,<0.8",
+    "mediapipe==0.10.21",
     "numpy>=1.26,<2.0",
+    "onnxruntime>=1.18",
     "opencv-contrib-python>=4.9,<5.0",
     "protobuf>=4.25.3,<5",
+    "pyinstaller>=6.0",
+    "pywebview>=5.0",
+    "rtmlib>=0.0.15",
 ]
 
 [project.optional-dependencies]
