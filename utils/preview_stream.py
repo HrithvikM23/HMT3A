@@ -42,9 +42,11 @@ class PreviewFrameSink:
             try:
                 item = self._queue.get(timeout=0.1)
                 if item is not None:
-                    frame, frame_index = item
-                    self._process_frame(frame, frame_index)
-                    self._queue.task_done()
+                    try:
+                        frame, frame_index = item
+                        self._process_frame(frame, frame_index)
+                    finally:
+                        self._queue.task_done()
             except __import__("queue").Empty:
                 continue
 
@@ -100,19 +102,9 @@ class PreviewFrameSink:
                 pass
 
     def close(self) -> None:
+        self._stop_event.set()
         if self._thread is not None and self._thread.is_alive():
-            try:
-                # Flush remaining items
-                while not self._queue.empty():
-                    try:
-                        self._queue.join()
-                        break
-                    except AttributeError:
-                        break
-            except Exception:
-                pass
-            self._stop_event.set()
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=1.0)
 
     def _cleanup_old_frames(self) -> None:
         if self.path is None:

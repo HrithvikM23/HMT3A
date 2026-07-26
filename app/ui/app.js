@@ -176,8 +176,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Action Buttons
   btnStart?.addEventListener('click', async () => {
     setStatus('Running...', 'running');
-    if (previewPlaceholder) previewPlaceholder.style.display = 'none';
-    if (livePreviewImg) livePreviewImg.style.display = 'block';
+    if (previewPlaceholder) {
+      previewPlaceholder.style.display = 'flex';
+      const placeholderText = previewPlaceholder.querySelector('.placeholder-text');
+      if (placeholderText) placeholderText.textContent = 'Initializing Pipeline & Model Assets...';
+    }
     appendLog('Starting Kinara Motion Tracking Pipeline...', 'system');
     const customCmd = state.isCustomCommand ? cmdInput?.value : null;
     const result = await callPy('start_run', customCmd);
@@ -1019,12 +1022,12 @@ document.addEventListener('DOMContentLoaded', () => {
     { title: '🔀 Processing Mode: Parallel', category: 'Tune', action: () => { const el = document.getElementById('tuneExecutionModeSelect'); if (el) { el.value = 'parallel'; el.dispatchEvent(new Event('change')); } } },
     { title: '🔀 Processing Mode: Pipeline Parallel', category: 'Tune', action: () => { const el = document.getElementById('tuneExecutionModeSelect'); if (el) { el.value = 'pipeline-parallel'; el.dispatchEvent(new Event('change')); } } },
     // Body Backend
-    { title: '🦴 Body Backend: MediaPipe', category: 'Tune', action: () => { const el = document.getElementById('tuneBackendSelect'); if (el) { el.value = 'mediapipe'; el.dispatchEvent(new Event('change')); } } },
+    { title: '🦴 Body Backend: MediaPipe (Recommended)', category: 'Tune', action: () => { const el = document.getElementById('tuneBackendSelect'); if (el) { el.value = 'mediapipe'; el.dispatchEvent(new Event('change')); } } },
     { title: '🦴 Body Backend: RTMPose', category: 'Tune', action: () => { const el = document.getElementById('tuneBackendSelect'); if (el) { el.value = 'rtmpose'; el.dispatchEvent(new Event('change')); } } },
     { title: '🦴 Body Backend: YOLO', category: 'Tune', action: () => { const el = document.getElementById('tuneBackendSelect'); if (el) { el.value = 'yolo'; el.dispatchEvent(new Event('change')); } } },
     { title: '🦴 Body Backend: WholeBody', category: 'Tune', action: () => { const el = document.getElementById('tuneBackendSelect'); if (el) { el.value = 'wholebody'; el.dispatchEvent(new Event('change')); } } },
     // Hand Backend
-    { title: '✋ Hand Backend: MediaPipe', category: 'Tune', action: () => { const el = document.getElementById('tuneHandBackendSelect'); if (el) { el.value = 'mediapipe'; el.dispatchEvent(new Event('change')); } } },
+    { title: '✋ Hand Backend: MediaPipe (Recommended)', category: 'Tune', action: () => { const el = document.getElementById('tuneHandBackendSelect'); if (el) { el.value = 'mediapipe'; el.dispatchEvent(new Event('change')); } } },
     { title: '✋ Hand Backend: ONNX', category: 'Tune', action: () => { const el = document.getElementById('tuneHandBackendSelect'); if (el) { el.value = 'onnx'; el.dispatchEvent(new Event('change')); } } },
     { title: '✋ Hand Backend: RTMPose WholeBody', category: 'Tune', action: () => { const el = document.getElementById('tuneHandBackendSelect'); if (el) { el.value = 'rtmpose-wholebody'; el.dispatchEvent(new Event('change')); } } },
     { title: '✋ Hand Backend: Disabled', category: 'Tune', action: () => { const el = document.getElementById('tuneHandBackendSelect'); if (el) { el.value = 'none'; el.dispatchEvent(new Event('change')); } } },

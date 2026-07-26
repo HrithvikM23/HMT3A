@@ -476,9 +476,10 @@ class KinaraWebAPI:
         self.safe_evaluate_js("window.resetPreviewStage();")
 
     def _terminate_process_tree(self, force: bool = False) -> None:
-        if self._process is None:
+        proc = self._process
+        if proc is None:
             return
-        pid = self._process.pid
+        pid = proc.pid
         try:
             if os.name == "nt":
                 subprocess.run(
@@ -489,9 +490,9 @@ class KinaraWebAPI:
                 )
             else:
                 if force:
-                    self._process.kill()
+                    proc.kill()
                 else:
-                    self._process.terminate()
+                    proc.terminate()
         except Exception:
             pass
         finally:
@@ -548,13 +549,27 @@ class KinaraWebAPI:
             self.set_status("Error", "error")
 
     def _stream_stdout(self) -> None:
-        if self._process is None or self._process.stdout is None:
+        proc = self._process
+        if proc is None or proc.stdout is None:
             return
-        for line in iter(self._process.stdout.readline, ""):
-            if line:
-                self.log(line.rstrip())
-        self._process.stdout.close()
-        rc = self._process.wait()
+        try:
+            for line in iter(proc.stdout.readline, ""):
+                if line:
+                    self.log(line.rstrip())
+        except (Exception, BaseException):
+            pass
+        finally:
+            try:
+                if proc.stdout:
+                    proc.stdout.close()
+            except (Exception, BaseException):
+                pass
+
+        try:
+            rc = proc.wait()
+        except (Exception, BaseException):
+            rc = -1
+
         with self._lock:
             self._preview_running = False
             user_stopped = self._user_stopped

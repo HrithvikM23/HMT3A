@@ -71,11 +71,12 @@ def _resolve_provider_names(config) -> list[str]:
         if resolved_name is not None and resolved_name not in requested_providers:
             requested_providers.append(resolved_name)
 
+    for fallback in ("CPUExecutionProvider", "AzureExecutionProvider"):
+        if fallback in available_providers and available_providers[fallback] not in requested_providers:
+            requested_providers.append(available_providers[fallback])
+
     if requested_providers:
         return requested_providers
-
-    if "CPUExecutionProvider" in available_providers:
-        return [available_providers["CPUExecutionProvider"]]
 
     return list(available_providers.values())
 
@@ -419,8 +420,27 @@ class ONNXPoseHandRunner:
         return np.asarray(tensor_like, dtype=dtype)
 
     def detect_bodies(self, frame_bgr, max_people: int, track: bool):
+        orig_h, orig_w = frame_bgr.shape[:2]
+        proc_width = self.config.processing_width
+        if proc_width <= 0:
+            if self.config.profile == "fastest":
+                proc_width = 640
+            elif self.config.profile == "mid":
+                proc_width = 960
+
+        if proc_width > 0 and orig_w > proc_width:
+            scale = proc_width / float(orig_w)
+            proc_height = max(1, int(round(orig_h * scale)))
+            infer_frame = cv2.resize(frame_bgr, (proc_width, proc_height), interpolation=cv2.INTER_LINEAR)
+            scale_x = orig_w / float(proc_width)
+            scale_y = orig_h / float(proc_height)
+        else:
+            infer_frame = frame_bgr
+            scale_x = 1.0
+            scale_y = 1.0
+
         if self.config.body_backend in {"rtmpose", "rtmpose-wholebody"}:
-            return self._detect_bodies_rtmpose(frame_bgr, max_people)
+            return self._detect_bodies_rtmpose(infer_frame, max_people, scale_x=scale_x, scale_y=scale_y)
 
         if self.config.body_backend == "mediapipe":
             body_points = self._detect_body_mediapipe(frame_bgr)
@@ -452,20 +472,28 @@ class ONNXPoseHandRunner:
                 }
             ][:max_people]
 
-        if track:
-            assert self.body_model is not None
-            results = self.body_model.track(
-                frame_bgr,
-                **self._yolo_common_args(max_people),
-                persist=True,
-                tracker=self.config.yolo_tracker,
-            )
-        else:
-            assert self.body_model is not None
-            results = self.body_model.predict(
-                frame_bgr,
-                **self._yolo_common_args(max_people),
-            )
+        try:
+            import torch
+            no_grad_ctx = torch.inference_mode()
+        except Exception:
+            from contextlib import nullcontext
+            no_grad_ctx = nullcontext()
+
+        with no_grad_ctx:
+            if track:
+                assert self.body_model is not None
+                results = self.body_model.track(
+                    infer_frame,
+                    **self._yolo_common_args(max_people),
+                    persist=True,
+                    tracker=self.config.yolo_tracker,
+                )
+            else:
+                assert self.body_model is not None
+                results = self.body_model.predict(
+                    infer_frame,
+                    **self._yolo_common_args(max_people),
+                )
 
         if not results:
             return []
@@ -487,8 +515,8 @@ class ONNXPoseHandRunner:
             detection_score = float(boxes_conf[index])
             body_points: list[tuple[int, int, float]] = []
             for point in keypoints:
-                point_x = float(point[0])
-                point_y = float(point[1])
+                point_x = float(point[0]) * scale_x
+                point_y = float(point[1]) * scale_y
                 point_conf = float(point[2])
                 body_points.append((int(round(point_x)), int(round(point_y)), point_conf))
             detections.append(
@@ -496,10 +524,10 @@ class ONNXPoseHandRunner:
                     "id": detection_id,
                     "score": detection_score,
                     "box": (
-                        int(round(float(box[0]))),
-                        int(round(float(box[1]))),
-                        int(round(float(box[2]))),
-                        int(round(float(box[3]))),
+                        int(round(float(box[0]) * scale_x)),
+                        int(round(float(box[1]) * scale_y)),
+                        int(round(float(box[2]) * scale_x)),
+                        int(round(float(box[3]) * scale_y)),
                     ),
                     "body_points": body_points,
                 }
@@ -507,7 +535,7 @@ class ONNXPoseHandRunner:
         detections.sort(key=lambda item: item["score"], reverse=True)
         return detections[:max_people]
 
-    def _detect_bodies_rtmpose(self, frame_bgr, max_people: int) -> list[BodyDetection]:
+    def _detect_bodies_rtmpose(self, frame_bgr, max_people: int, scale_x: float = 1.0, scale_y: float = 1.0) -> list[BodyDetection]:
         if self.rtmpose_model is None:
             return []
 
@@ -531,13 +559,20 @@ class ONNXPoseHandRunner:
             for point_index in range(point_count):
                 point = person_keypoints[point_index]
                 score = float(person_scores[point_index])
-                body_points.append((int(round(float(point[0]))), int(round(float(point[1]))), score))
+                px = int(round(float(point[0]) * scale_x))
+                py = int(round(float(point[1]) * scale_y))
+                body_points.append((px, py, score))
             while len(body_points) < 17:
                 body_points.append((0, 0, 0.0))
             if self.config.body_backend == "rtmpose-wholebody":
                 hands_by_side = self._extract_wholebody_hands(person_keypoints, person_scores)
                 if hands_by_side:
-                    self._wholebody_hands_by_body[tuple(body_points)] = hands_by_side
+                    # Scale hand landmarks to match original frame scale
+                    scaled_hands = {}
+                    for side, hand_pts in hands_by_side.items():
+                        scaled_pts = [(int(round(x * scale_x)), int(round(y * scale_y)), c) for x, y, c in hand_pts]
+                        scaled_hands[side] = scaled_pts
+                    self._wholebody_hands_by_body[tuple(body_points)] = scaled_hands
 
             frame_h, frame_w = frame_bgr.shape[:2]
             confident_points = [
@@ -551,11 +586,11 @@ class ONNXPoseHandRunner:
                 box = (
                     max(0, min(x_values)),
                     max(0, min(y_values)),
-                    min(frame_w, max(x_values)),
-                    min(frame_h, max(y_values)),
+                    min(int(round(frame_w * scale_x)), max(x_values)),
+                    min(int(round(frame_h * scale_y)), max(y_values)),
                 )
             else:
-                box = (0, 0, frame_w, frame_h)
+                box = (0, 0, int(round(frame_w * scale_x)), int(round(frame_h * scale_y)))
             detections.append(
                 {
                     "id": None,

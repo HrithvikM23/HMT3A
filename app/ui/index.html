@@ -219,16 +219,16 @@
           </div>
 
           <!-- MediaPipe Preset -->
-          <div class="preset-card">
+          <div class="preset-card highlighted">
             <div class="card-header">
               <div class="card-title-group">
                 <div class="card-icon-badge cyan">MP</div>
                 <div>
-                  <span class="card-title">MediaPipe Pose</span>
-                  <span class="card-subtitle">Fast single-person CPU/GPU tracking</span>
+                  <span class="card-title">MediaPipe Pose (Recommended)</span>
+                  <span class="card-subtitle">Fast single/multi-person CPU/GPU tracking</span>
                 </div>
               </div>
-              <span class="card-badge badge-cyan">MediaPipe</span>
+              <span class="card-badge badge-cyan">RECOMMENDED</span>
             </div>
             <p class="card-desc">Standard MediaPipe Pose & Hands. Lite runs ultra-fast, Heavy provides maximum landmark precision.</p>
             <div class="card-controls">
@@ -253,7 +253,7 @@
           </div>
 
           <!-- RTMPose Preset -->
-          <div class="preset-card highlighted">
+          <div class="preset-card">
             <div class="card-header">
               <div class="card-title-group">
                 <div class="card-icon-badge blue">RTM</div>
@@ -262,7 +262,7 @@
                   <span class="card-subtitle">NVIDIA GPU Accelerated Tracking</span>
                 </div>
               </div>
-              <span class="card-badge badge-blue">RECOMMENDED</span>
+              <span class="card-badge badge-blue">CUDA</span>
             </div>
             <p class="card-desc">High-speed RTMPose body pipeline paired with ONNX hand tracking for accurate multi-person motion.</p>
             <div class="card-controls">
@@ -513,9 +513,9 @@
                 <div class="form-group">
                   <label class="form-label" for="tuneBackendSelect">Body Pose Backend (--body-backend)</label>
                   <select class="form-control" id="tuneBackendSelect">
-                    <option value="mediapipe" selected>MediaPipe Pose (CPU / GPU Default)</option>
+                    <option value="mediapipe" selected>MediaPipe Pose (Recommended)</option>
                     <option value="rtmpose">RTMPose (CUDA TensorRT / ONNX)</option>
-                    <option value="yolo">ONNX YOLO Pose (Fast Inference)</option>
+                    <option value="yolo">ONNX YOLO Pose (Legacy)</option>
                     <option value="wholebody">RTMPose WholeBody (Full Body + Face + Hands)</option>
                   </select>
                 </div>
@@ -532,7 +532,7 @@
                 <div class="form-group">
                   <label class="form-label" for="tuneHandBackendSelect">Hand Tracking Backend (--hand-backend)</label>
                   <select class="form-control" id="tuneHandBackendSelect">
-                    <option value="mediapipe" selected>MediaPipe Hands</option>
+                    <option value="mediapipe" selected>MediaPipe Hands (Recommended)</option>
                     <option value="onnx">ONNX Local Hand Model</option>
                     <option value="rtmpose-wholebody">RTMPose WholeBody Hands</option>
                     <option value="none">Disabled (Pose Only)</option>
